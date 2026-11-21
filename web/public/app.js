@@ -23,22 +23,47 @@ async function api(path, opts) {
 const cache = {};
 const get = (path) => (cache[path] ||= api(path).catch((e) => { delete cache[path]; throw e; }));
 
-// ---------- who is viewing (no login; a view-as switch)
-const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
-let SCOPE = store.get("scope") || "AM-03";
-async function initWho() {
-  const s = await get("/api/stores");
-  const sel = document.getElementById("am-select");
-  sel.innerHTML = `<option value="network">HQ · all 20 stores</option>` +
-    s.area_managers.map((a) => `<option value="${a.area_manager_id}">${esc(a.name)} · ${esc(a.city)}</option>`).join("");
-  if (![...sel.options].some((o) => o.value === SCOPE)) SCOPE = "AM-03";
-  sel.value = SCOPE;
-  const setAvatar = () => {
-    const a = s.area_managers.find((x) => x.area_manager_id === SCOPE);
-    document.getElementById("avatar").textContent = a ? a.name.split(" ").map((w) => w[0]).join("").slice(0, 2) : "HQ";
-  };
-  setAvatar();
-  sel.onchange = () => { SCOPE = sel.value; store.set("scope", SCOPE); setAvatar(); render(); };
+// ---------- session (demo sign-in, no password; the server enforces what each role may read)
+let SESSION = null;
+let SCOPE = "AM-03"; // area-manager portal: which region the screens focus on (all data stays visible)
+const initials = (n) => n.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+const RAIL = {
+  home: '<svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+  store: '<svg viewBox="0 0 24 24"><path d="M4 9l1.5-5h13L20 9M4 9h16v11H4zM4 9c0 1.7 1.3 3 3 3s3-1.3 3-3m0 0c0 1.7 1.3 3 2 3s2-1.3 2-3m0 0c0 1.7 1.3 3 3 3s3-1.3 3-3"/></svg>',
+  target: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
+  card: '<svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4"/></svg>',
+  chart: '<svg viewBox="0 0 24 24"><path d="M5 20V11M10 20V6M15 20v-8M20 20V4"/></svg>',
+  spark: '<svg viewBox="0 0 24 24"><path d="M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/></svg>',
+};
+function paintChrome() {
+  const pills = document.getElementById("pills"), who = document.getElementById("who"), rail = document.getElementById("rail");
+  let links = [];
+  if (SESSION?.role === "am") links = [["/am", "Command Centre", "home"], ["/am/stores", "Stores", "store"], ["/am/missions", "Rescue Missions", "target"], ["/am/cards", "Coach Cards", "card"], ["/am/insights", "Insights", "chart"]];
+  else if (SESSION?.role === "sp") links = [["/sp", "My Coach", "card"], ["/demo", "Live case", "spark"]];
+  else links = [["/", "Home", "home"], ["/demo", "Live case", "spark"], ["/login/am", "Area Manager portal", "target"], ["/login/sp", "Salesperson portal", "card"]];
+  pills.innerHTML = links.map(([h, l]) => `<a href="${h}" data-link>${l}</a>`).join("");
+  rail.innerHTML = links.map(([h, l, i]) => `<a href="${h}" data-link title="${l}">${RAIL[i]}</a>`).join("");
+  if (!SESSION) { who.innerHTML = ""; return; }
+  const portal = SESSION.role === "am" ? "Area Manager portal" : `Salesperson portal · ${esc(SESSION.store_id)}`;
+  who.innerHTML = `<span class="avatar">${esc(initials(SESSION.name))}</span><div class="small"><b>${esc(SESSION.name)}</b><div class="muted">${portal} · demo</div></div>
+    ${SESSION.role === "am" ? `<select id="am-select" class="ctl" aria-label="Region in focus" style="padding:6px 8px"></select>` : ""}
+    <button class="btn ghost" id="signout" style="padding:7px 14px">Sign out</button>`;
+  document.getElementById("signout").onclick = async () => { await api("/api/logout", { method: "POST" }); SESSION = null; MISSIONS = null; for (const k in cache) delete cache[k]; nav("/"); };
+  if (SESSION.role === "am") {
+    get("/api/directory").then((d) => {
+      const sel = document.getElementById("am-select");
+      if (!sel) return;
+      sel.innerHTML = `<option value="network">Focus: HQ · all 20 stores</option>` + d.area_managers.map((a) => `<option value="${a.id}">Focus: ${esc(a.city)}${a.id === SESSION.id ? " (mine)" : ""}</option>`).join("");
+      sel.value = SCOPE;
+      sel.onchange = () => { SCOPE = sel.value; render(); };
+    });
+  }
+}
+async function signIn(role, id) {
+  const r = await api("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ role, id }) });
+  SESSION = r.session; MISSIONS = null; for (const k in cache) delete cache[k];
+  if (role === "am") SCOPE = id;
+  nav(role === "am" ? "/am" : "/sp");
 }
 const amOf = (s, id) => s.area_managers.find((a) => a.area_manager_id === id);
 const storesIn = (s, scope) => scope === "network" ? s.stores.map((x) => x.store_id) : amOf(s, scope).stores.split(",").map((x) => x.trim());
@@ -46,8 +71,14 @@ const storesIn = (s, scope) => scope === "network" ? s.stores.map((x) => x.store
 // ---------- missions (D1)
 let MISSIONS = null;
 async function missions(force) {
+  if (SESSION?.role !== "am") return (MISSIONS ||= {});
   if (!MISSIONS || force) MISSIONS = Object.fromEntries((await api("/api/missions")).missions.map((m) => [m.issue_id, m]));
   return MISSIONS;
+}
+async function loadOne(id) {
+  const r = await api(`/api/missions/one?id=${encodeURIComponent(id)}`).catch(() => ({ mission: null }));
+  MISSIONS = { ...(MISSIONS || {}) };
+  if (r.mission) MISSIONS[id] = r.mission;
 }
 function ackButton(id) {
   const m = MISSIONS?.[id];
@@ -146,7 +177,7 @@ function topIssues(brief, scope, n) {
 
 // ---------- views
 const views = {
-  "/": async () => {
+  "/am": async () => {
     const [s, m, sc] = await Promise.all([get("/api/stores"), get("/api/meta"), get(`/api/stores?scope=${SCOPE}`)]);
     const brief = await get(`/api/brief?date=${m.latest}`);
     const am = amOf(s, SCOPE);
@@ -155,7 +186,7 @@ const views = {
     const ids = storesIn(s, SCOPE);
     const featured = SCOPE === "network" || ids.includes("PAT-02")
       ? { code: "PAT-02", line: "Aman B. adds a jacket to 3 of 60 kurta-set bills; his store peers 18.2%.", opp: 35223, note: "92-day showcase · hypothetical", href: "/demo" }
-      : top[0] ? { code: top[0].store_id, line: top[0].title, opp: top[0].rupees, note: "per 28 days · estimate", href: "/missions" } : null;
+      : top[0] ? { code: top[0].store_id, line: top[0].title, opp: top[0].rupees, note: "per 28 days · estimate", href: "/am/missions" } : null;
     app.innerHTML = `
       <section class="hero">${archSVG}
         <div class="hello">Good morning${am ? ", " + esc(am.name.split(" ")[0]) : ""}</div>
@@ -177,9 +208,9 @@ const views = {
       <div class="grid2" style="margin-top:22px">
         <section class="card"><div class="row-flex"><h2>Sales performance</h2><div class="seg" id="seg"><button data-k="week">Week</button><button data-k="month" class="on">Month</button></div></div>
           <div id="chartbox"></div><p class="muted small">Sales incl. GST from every bill line (packaging excluded). Oct 2025 peaked on Diwali (20 Oct); Diwali 2026 falls on 8 Nov, after the data ends.</p></section>
-        <section class="card"><div class="row-flex"><h2>Top rescue missions</h2><a href="/missions" data-link class="small">View all →</a></div>
+        <section class="card"><div class="row-flex"><h2>Top rescue missions</h2><a href="/am/missions" data-link class="small">View all →</a></div>
           <div class="scroll"><table><tr><th>Store / owner</th><th>Reason</th><th class="num">Opportunity</th></tr>
-          ${top.map((i) => `<tr class="click" data-go="/missions?am=${esc(s.stores.find((x) => x.store_id === i.store_id).area_manager_id)}"><td><div class="person"><span class="dot">${ICON.user}</span><div><b>${esc(i.salesperson_id ? i.owner : i.store_id)}</b><div class="muted small">${esc(i.store_id)} · ${esc(i.lever)}</div></div></div></td><td class="small">${esc(i.title)}</td><td class="num opp-cell">${inr(i.rupees)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Nothing needs attention this week.</td></tr>`}
+          ${top.map((i) => `<tr class="click" data-go="/am/missions?am=${esc(s.stores.find((x) => x.store_id === i.store_id).area_manager_id)}"><td><div class="person"><span class="dot">${ICON.user}</span><div><b>${esc(i.salesperson_id ? i.owner : i.store_id)}</b><div class="muted small">${esc(i.store_id)} · ${esc(i.lever)}</div></div></div></td><td class="small">${esc(i.title)}</td><td class="num opp-cell">${inr(i.rupees)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Nothing needs attention this week.</td></tr>`}
           </table></div><p class="muted small">Ranked by estimated rupees at stake per 28 days. Brief for ${esc(m.latest)}.</p></section>
       </div>`;
     const draw = (k) => {
@@ -194,7 +225,7 @@ const views = {
     draw("month");
   },
 
-  "/stores": async () => {
+  "/am/stores": async () => {
     const s = await get("/api/stores");
     const qs = new URLSearchParams(location.search);
     const ids = storesIn(s, SCOPE), net = s.network;
@@ -206,7 +237,7 @@ const views = {
       <p class="sub">Every number is computed from bills, bill lines and door-camera footfall. Coloured arrows compare with each store's previous 28 days. Click a store for its 24-month trend and repeat role models.</p>
       <section class="card scroll" style="margin-top:18px"><table>
         <tr><th>Store</th><th>City · tier</th><th class="num">Sales</th><th class="num">vs prior</th><th class="num">Conversion</th><th class="num">Avg bill</th><th class="num">Items / bill</th><th class="num">Discount</th><th class="num">Repeat</th></tr>
-        ${rows.map((r) => { const c = r.last28, p = r.prev28; return `<tr class="click" data-go="/stores?id=${r.store_id}">
+        ${rows.map((r) => { const c = r.last28, p = r.prev28; return `<tr class="click" data-go="/am/stores?id=${r.store_id}">
           <td><b>${esc(r.store_id)}</b>${r.store_id === sel ? " ◂" : ""}${flagged.has(r.store_id) ? ` <span class="tag warn" title="Door-camera fault days excluded">data flag</span>` : ""}${r.opened_on > "2026-08-01" ? ` <span class="tag">new ${esc(r.opened_on)}</span>` : ""}</td>
           <td class="small">${esc(r.city)} · ${esc(r.tier)}</td><td class="num">${inrShort(c.sales)}</td><td class="num">${delta(c.sales, p.sales)}</td>
           <td class="num">${pct(c.conversion)} ${delta(c.conversion, p.conversion, "pp")}</td><td class="num">${c.atv ? inr(c.atv) : "—"}</td><td class="num">${c.ipb?.toFixed(2) ?? "—"}</td>
@@ -229,7 +260,7 @@ const views = {
     }
   },
 
-  "/missions": async () => {
+  "/am/missions": async () => {
     const m = await get("/api/meta");
     const qs = new URLSearchParams(location.search);
     const date = qs.get("date") || m.latest;
@@ -255,17 +286,17 @@ const views = {
           <details><summary>Evidence, receipts & math</summary><ul>${i.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>
             <p class="muted">${esc(i.rupees_basis)}</p>
             ${i.receipts ? `<p class="mono">Source bills (${i.receipt_count}): ${i.receipts.map(esc).join(", ")}${i.receipt_count > i.receipts.length ? " …" : ""}</p>` : ""}
-            ${i.salesperson_id ? `<p><a href="/me?date=${date}&sp=${i.salesperson_id}" data-link>Open ${esc(i.owner)}'s coach card →</a></p>` : ""}
+            ${i.salesperson_id ? `<p><a href="/am/cards?date=${date}&sp=${i.salesperson_id}" data-link>Open ${esc(i.owner)}'s coach card →</a></p>` : ""}
           </details>
           ${followUp(i.follow_up)}
           <div style="margin-top:12px">${ackButton(i.id)}</div>
         </section>`).join("")}`;
-    const go = () => nav(`/missions?am=${document.getElementById("am").value}&date=${document.getElementById("date").value}`);
+    const go = () => nav(`/am/missions?am=${document.getElementById("am").value}&date=${document.getElementById("date").value}`);
     document.getElementById("am").onchange = go;
     document.getElementById("date").onchange = go;
   },
 
-  "/me": async () => {
+  "/am/cards": async () => {
     const m = await get("/api/meta");
     const qs = new URLSearchParams(location.search);
     const date = qs.get("date") || m.latest;
@@ -285,12 +316,12 @@ const views = {
         <div class="phone"><div class="eyebrow">SUTRA · ${esc(c.store_id)} · ${esc(c.lever)}</div><p class="msg">${esc(c.text)}</p><p style="color:#bfb3a2" class="small">${c.words} words</p></div>
         <section class="card"><h3>Checks passed before sending</h3><ul class="checks">${Object.entries(c.checks).map(([k, v]) => `<li class="${v ? "" : "fail"}"><b>${v ? "✓" : "✗"}</b>${esc(k)}</li>`).join("")}</ul>
         <p style="margin-top:16px">${ackButton(c.issue_id)}</p></section></div>` : `<div class="card">No cards on this date.</div>`}`;
-    const go = () => nav(`/me?date=${document.getElementById("date").value}&sp=${document.getElementById("sp").value}`);
+    const go = () => nav(`/am/cards?date=${document.getElementById("date").value}&sp=${document.getElementById("sp").value}`);
     document.getElementById("sp").onchange = go;
-    document.getElementById("date").onchange = () => nav(`/me?date=${document.getElementById("date").value}`);
+    document.getElementById("date").onchange = () => nav(`/am/cards?date=${document.getElementById("date").value}`);
   },
 
-  "/insights": async () => {
+  "/am/insights": async () => {
     const m = await get("/api/meta");
     const date = new URLSearchParams(location.search).get("date") || m.latest;
     const [brief, runs, s] = await Promise.all([get(`/api/brief?date=${date}`), api("/api/runs"), get("/api/stores")]);
@@ -317,7 +348,7 @@ const views = {
       </div>`;
     document.getElementById("runnow").onclick = async (e) => {
       e.target.disabled = true;
-      try { const r = await api("/api/run-now", { method: "POST" }); document.getElementById("runmsg").textContent = r.throttled ? r.note : `Done: ${r.counts.issues_found} issues, ${r.counts.cards} cards.`; await sleep(700); views["/insights"](); }
+      try { const r = await api("/api/run-now", { method: "POST" }); document.getElementById("runmsg").textContent = r.throttled ? r.note : `Done: ${r.counts.issues_found} issues, ${r.counts.cards} cards.`; await sleep(700); views["/am/insights"](); }
       catch (err) { document.getElementById("runmsg").textContent = err.message; e.target.disabled = false; }
     };
   },
@@ -331,8 +362,116 @@ const views = {
       <p style="margin-top:18px"><button class="btn" id="run">Run investigation</button></p>
       <div class="loader" id="loader"></div>
       <div id="out"></div>`;
-    await missions();
+    await loadOne("PAT-02-KURTA-JACKET-92D");
     document.getElementById("run").onclick = runCase;
+  },
+
+  "/": async () => {
+    app.innerHTML = `
+      <section class="hero">${archSVG}
+        <div class="hello">SUTRA AI · Store Coach for Manyavar</div>
+        <h1>Every morning,<br>one thing to do better.</h1>
+        <p class="sub">SUTRA reads every bill, finds where a store is leaking sales, proves it with receipts, and tells each area manager which stores need attention, and each salesperson one thing to do today. No one has to ask it a question.</p>
+      </section>
+      <div class="grid2" style="margin-top:26px">
+        <a class="card" href="/login/am" data-link style="text-decoration:none;color:inherit">
+          <div class="kpi"><div class="ic">${ICON.target}</div><div><div class="eyebrow">Portal 1</div><h2>Area Manager</h2>
+          <p class="muted">Full view of all 20 stores: Command Centre, ranked rescue missions with receipts, every coach card, store trends, data-quality flags and the daily run log.</p>
+          <span class="btn">Enter Area Manager portal →</span></div></div></a>
+        <a class="card" href="/login/sp" data-link style="text-decoration:none;color:inherit">
+          <div class="kpi"><div class="ic">${ICON.user}</div><div><div class="eyebrow">Portal 2</div><h2>Salesperson</h2>
+          <p class="muted">Limited view: only your own coach card, your own numbers against your store average, your own recent bills and your card history. Nobody else's data.</p>
+          <span class="btn">Enter Salesperson portal →</span></div></div></a>
+      </div>
+      <section class="card featured" style="margin-top:22px">
+        <div><div class="eyebrow">No sign-in needed</div><div class="code">PAT-02</div><div class="muted">Watch one live investigation end to end: detect, prove, coach, assign, re-measure.</div></div>
+        <div class="divider"></div>
+        <div><div class="muted">Estimated opportunity</div><div class="opp">₹35,223</div><div class="muted small">92-day showcase · hypothetical</div></div>
+        <a class="btn" href="/demo" data-link>Open live case →</a>
+        <div class="art">${motifSVG}</div></section>
+      <div class="grid3" style="margin-top:22px">
+        <div class="card"><span class="tag teal">More bills</span><h3>Conversion</h3><p class="small">Bills ÷ door-camera walk-ins. Finds a top seller missing from the roster and walk-ins who leave without buying.</p></div>
+        <div class="card"><span class="tag teal">Bigger baskets</span><h3>Items per bill</h3><p class="small">A jacket with a kurta set; a safa or mojari with a sherwani; categories a city buys; discounts above the store norm.</p></div>
+        <div class="card"><span class="tag teal">More repeat</span><h3>Return customers</h3><p class="small">First-time customers who bill again 30+ days later, and the role models whose customers do.</p></div>
+      </div>
+      <p class="muted small" style="margin-top:16px">Demo sign-in: pick a person, no password. Data is the synthetic Manyavar VCH3 pack; no real store, salesperson or customer.</p>`;
+  },
+
+  "/login/am": async () => {
+    const d = await get("/api/directory");
+    app.innerHTML = `
+      <div class="eyebrow">Area Manager portal · demo sign-in</div><h1>Who is signing in?</h1>
+      <p class="sub">One area manager per city. Area managers see all data; their own city is the default focus. No password in this demo.</p>
+      <div class="grid3" style="margin-top:20px">${d.area_managers.map((a) => `
+        <button class="card" data-am="${a.id}" style="text-align:left;cursor:pointer;font:inherit;color:inherit">
+          <div class="person"><span class="avatar">${esc(initials(a.name))}</span><div><b>${esc(a.name)}</b><div class="muted small">${esc(a.city)} · ${a.stores.length} stores</div></div></div>
+          <p class="muted small" style="margin:10px 0 0">${esc(a.stores.join(", "))}</p></button>`).join("")}</div>
+      <p class="small" style="margin-top:16px"><a href="/login/sp" data-link>Are you a salesperson? Use the Salesperson portal →</a></p>`;
+    app.querySelectorAll("[data-am]").forEach((b) => (b.onclick = async () => { b.disabled = true; try { await signIn("am", b.dataset.am); } catch (e) { b.disabled = false; b.insertAdjacentHTML("beforeend", `<p class="error">${esc(e.message)}</p>`); } }));
+  },
+
+  "/login/sp": async () => {
+    const d = await get("/api/directory");
+    const qs = new URLSearchParams(location.search);
+    const st = qs.get("store") || "PAT-02";
+    const list = d.salespeople[st] || [];
+    app.innerHTML = `
+      <div class="eyebrow">Salesperson portal · demo sign-in</div><h1>Find yourself</h1>
+      <p class="sub">Pick your store, then your name. You will only see your own card and numbers. No password in this demo.</p>
+      <p style="margin-top:14px"><select class="ctl" id="store">${d.stores.map((s) => `<option value="${s.store_id}" ${s.store_id === st ? "selected" : ""}>${esc(s.store_id)} · ${esc(s.city)} · ${esc(s.tier)}</option>`).join("")}</select></p>
+      <div class="grid3" style="margin-top:14px">${list.map((x) => `
+        <button class="card" data-sp="${x.id}" style="text-align:left;cursor:pointer;font:inherit;color:inherit">
+          <div class="person"><span class="avatar">${esc(initials(x.name))}</span><div><b>${esc(x.name)}</b><div class="muted small">${esc(x.id)}</div></div></div>
+          ${x.has_card ? `<span class="tag maroon" style="margin-top:10px">Card waiting today</span>` : `<span class="tag" style="margin-top:10px">On track</span>`}</button>`).join("") || `<p class="muted">No active salespeople in the last 90 days.</p>`}</div>`;
+    document.getElementById("store").onchange = (e) => nav(`/login/sp?store=${e.target.value}`);
+    app.querySelectorAll("[data-sp]").forEach((b) => (b.onclick = async () => { b.disabled = true; try { await signIn("sp", b.dataset.sp); } catch (e) { b.disabled = false; b.insertAdjacentHTML("beforeend", `<p class="error">${esc(e.message)}</p>`); } }));
+  },
+
+  "/sp": async () => {
+    const v = await api("/api/sp/me");
+    const me = v.me, m = me.metrics, st = v.store;
+    MISSIONS = { ...(MISSIONS || {}), ...v.missions };
+    const today = [...v.cards].reverse().find((c) => c.card);
+    const latest = v.cards[v.cards.length - 1];
+    const cmp = (label, mine, store, fmt, higherBetter = true, note = "") => {
+      const better = mine == null || store == null ? null : higherBetter ? mine >= store : mine <= store;
+      return `<tr><td>${label}${note ? `<div class="muted small">${note}</div>` : ""}</td><td class="num"><b>${fmt(mine)}</b></td><td class="num muted">${fmt(store)}</td>
+        <td class="num">${better == null ? "" : better ? '<span class="delta up">at or above store</span>' : '<span class="delta down">below store</span>'}</td></tr>`;
+    };
+    const rate = (o) => (o && o.den ? o.num / o.den : null);
+    const frac = (o) => (o && o.den ? `${o.num}/${o.den} · ${pct(o.num / o.den)}` : "—");
+    app.innerHTML = `
+      <div class="hello">Good morning, ${esc(me.name.split(" ")[0])}</div>
+      <h1>My Coach</h1>
+      <p class="sub">${esc(me.store_id)} · ${esc(st.city)} · your last 90 days (${esc(v.window.join(" to "))}). This page shows only your own data.</p>
+      <div class="grid2" style="margin-top:20px">
+        <div>
+          <div class="eyebrow">${latest.card ? `Today's one thing · brief for ${esc(latest.replay_date)}` : "Today"}</div>
+          ${latest.card ? `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)} · ${esc(latest.card.lever)}</div><p class="msg">${esc(latest.card.text)}</p><p class="small" style="color:#bfb3a2">${latest.card.words} words</p></div>
+            <div style="margin-top:14px">${ackButton(latest.card.issue_id)}</div>`
+          : `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)}</div><p class="msg">${esc(me.name.split(" ")[0])}, nothing to fix today: every lever is within range of your store. Keep doing what you are doing.</p></div>`}
+        </div>
+        <section class="card"><h3>You vs your store</h3><p class="muted small">Store column = average of everyone in ${esc(me.store_id)} over the same 90 days. Other people's names and numbers are not shown here.</p>
+          <div class="scroll"><table><tr><th></th><th class="num">You</th><th class="num">Store</th><th></th></tr>
+          ${cmp("Bills", m.bills, st.bills_per_person, (x) => x == null ? "—" : Math.round(x).toLocaleString("en-IN"), true, "store = per person")}
+          ${cmp("Sales", m.sales, st.sales_per_person, (x) => x == null ? "—" : inrShort(x), true, "store = per person")}
+          ${cmp("Avg bill value", m.atv, st.atv, (x) => x == null ? "—" : inr(x))}
+          ${cmp("Items per bill", m.ipb, st.ipb, (x) => x == null ? "—" : x.toFixed(2))}
+          ${cmp("Discount", m.discount, st.discount, (x) => pct(x), false)}
+          ${cmp("Jacket with kurta set", rate(m.jacket_attach), rate(st.jacket_attach), (x) => pct(x), true, `you ${frac(m.jacket_attach)}`)}
+          ${cmp("Safa/mojari/mala with sherwani", rate(m.sherwani_addon), rate(st.sherwani_addon), (x) => pct(x), true, `you ${frac(m.sherwani_addon)}`)}
+          ${cmp("Customers who came back", rate(m.repeat), rate(st.repeat), (x) => pct(x), true, `you ${frac(m.repeat)} first-time customers`)}
+          </table></div>
+          <p class="muted small">Roster, last 28 days: ${me.roster_28d.present} days present, ${me.roster_28d.off} off.</p></section>
+      </div>
+      <div class="grid2" style="margin-top:20px">
+        <section class="card"><h3>My card history</h3><p class="muted small">One brief per replay date. Follow-ups are measured only where the next 7 days exist in the data.</p>
+          <table><tr><th>Brief</th><th>Card</th><th>Status</th></tr>
+          ${v.cards.map((c) => `<tr><td class="small">${esc(c.replay_date)}</td><td class="small">${c.card ? esc(c.card.text) : '<span class="muted">No card: within range</span>'}</td>
+            <td class="small">${c.card ? (v.missions[c.card.issue_id] ? '<span class="ok">✓ acknowledged</span>' : '<span class="muted">open</span>') + (v.follow[c.card.issue_id] ? `<div>${esc(v.follow[c.card.issue_id].status)}</div>` : "") : ""}</td></tr>`).join("")}</table></section>
+        <section class="card"><h3>My recent bills</h3><div class="scroll"><table><tr><th>Bill</th><th>Date</th><th>Items</th><th class="num">Value</th></tr>
+          ${me.recent_bills.map((b) => `<tr><td class="mono">${esc(b.bill_id)}</td><td class="small">${esc(b.date)}</td><td class="small">${esc(b.categories.join(", "))}</td><td class="num">${inr(b.value)}</td></tr>`).join("")}</table></div></section>
+      </div>`;
   },
 };
 
@@ -382,7 +521,7 @@ async function runCase() {
     <div class="grid2" style="margin-top:20px">
       <section class="card"><div class="eyebrow">Assign</div><h3>Mission</h3><p>Owner ${esc(f.name)} · what: a jacket with every kurta-set trial · when: today.</p>${ackButton(s.case_id)}</section>
       <section class="card"><div class="eyebrow">Re-measure</div><h3>7-day follow-up</h3><p class="tag warn">${esc(s.follow_up.status)}</p><p class="muted small">${esc(s.follow_up.reason)}</p>
-        <p class="small">Where the next 7 days do exist, see the <a href="/missions?date=2026-10-24&am=AM-03" data-link>24 Oct replay</a>: each issue shows its observed before/after.</p></section>
+        <p class="small">Where the next 7 days do exist, see the <a href="/am/missions?date=2026-10-24&am=AM-03" data-link>24 Oct replay</a> in the Area Manager portal: each issue shows its observed before/after.</p></section>
     </div>`;
 }
 
@@ -396,10 +535,15 @@ document.addEventListener("click", (e) => {
 });
 window.addEventListener("popstate", render);
 async function render() {
-  const path = location.pathname.replace(/\/$/, "") || "/";
+  let path = location.pathname.replace(/\/$/, "") || "/";
+  // portal guards (the server enforces the same rules on every API call)
+  if (path.startsWith("/am") && SESSION?.role !== "am") { history.replaceState({}, "", "/login/am"); path = "/login/am"; }
+  if (path === "/sp" && SESSION?.role !== "sp") { history.replaceState({}, "", "/login/sp"); path = "/login/sp"; }
+  if (path === "/" && SESSION) { const to = SESSION.role === "am" ? "/am" : "/sp"; history.replaceState({}, "", to); path = to; }
+  paintChrome();
   document.querySelectorAll(".pills a, .rail a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === path));
   const v = views[path] || views["/"];
   try { await v(); } catch (err) { app.innerHTML = `<p class="error">Could not load: ${esc(err.message)}</p>`; }
   if (!location.search.includes("id=")) window.scrollTo(0, 0);
 }
-initWho().catch(() => {}).finally(render);
+api("/api/session").then((r) => { SESSION = r.session; if (SESSION?.role === "am") SCOPE = SESSION.id; }).catch(() => {}).finally(render);
