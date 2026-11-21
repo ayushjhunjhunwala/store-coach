@@ -1,4 +1,4 @@
-"""SUTRA Store Coach detection engine.
+﻿"""SUTRA Store Coach detection engine.
 
 Reads the raw Manyavar CSVs and, for each replay date T, produces:
   - per area manager: at most `max_alerts_per_week` issues ranked by rupees at stake
@@ -331,7 +331,8 @@ def detect(T):
                              f"{sp.loc[rm, 'name'].split()[0] if rm else 'Your store manager'} can show you how they hold price."),
                 })
         # repeat: mature cohort of first-time customers served by each salesperson
-        coh = first[(first.store_id == store) & (first.d <= T - pd.Timedelta(days=60)) & (first.d > T - pd.Timedelta(days=240))]
+        # mature cohort: first-ever bill at this store at least a year before T (brief: repeat = billing again 30+ days later)
+        coh = first[(first.store_id == store) & (first.d <= T - pd.Timedelta(days=365))]
         if len(coh) >= 80:
             later = B[(B.d <= T) & B.customer_id.isin(coh.index)][["customer_id", "d"]]
             later = later.join(coh.d.rename("fd"), on="customer_id")
@@ -345,14 +346,14 @@ def detect(T):
                 for p, row in per.iterrows():
                     others = coh[coh.salesperson_id != p]
                     peer = others.back.mean()
-                    if peer - row.rate >= 0.08 and row.rate <= 0.65 * peer and p != rm:
-                        rupees = (peer - row.rate) * row["count"] * avg_bill * STORE_WIN / 180
+                    if peer - row.rate >= 0.04 and row.rate <= 0.5 * peer and p != rm:
+                        rupees = (peer - row.rate) * row["count"] * avg_bill * STORE_WIN / 365
                         sp_issues.append({
                             "id": f"{T.date()}-{p}-REPEAT", "store_id": store, "salesperson_id": p, "lever": "More repeat", "kpi": "repeat",
                             "behaviour": "Give every first-time customer a reason to come back",
                             "title": f"{sp.loc[p, 'name']}'s first-time customers rarely come back",
                             "cause": f"{int(row['sum'])} of {int(row['count'])} first-time customers ({pct(row.rate)}) billed again 30+ days later; rest of {store} {pct(peer)}.",
-                            "evidence": [f"Cohort: first-ever bill at {store} between {(T - pd.Timedelta(days=239)).date()} and {(T - pd.Timedelta(days=60)).date()}, followed up to {T.date()}.",
+                            "evidence": [f"Cohort: customers whose first-ever bill was at {store} on or before {(T - pd.Timedelta(days=365)).date()} (a full year to return), followed up to {T.date()}.",
                                          f"Role model: {sp.loc[rm, 'name']} {int(per.loc[rm, 'sum'])} of {int(per.loc[rm, 'count'])} ({pct(per.loc[rm, 'rate'])})."],
                             "peer": {"id": rm, "name": sp.loc[rm, "name"], "num": int(per.loc[rm, "sum"]), "den": int(per.loc[rm, "count"])},
                             "num": int(row["sum"]), "den": int(row["count"]), "rate": round(float(row.rate), 4), "peer_rate": round(float(peer), 4),
@@ -361,6 +362,62 @@ def detect(T):
                                      f"{sp.loc[rm, 'name'].split()[0]} gets {per.loc[rm, 'rate'] * 100:.0f}%. Today, on every first bill, note the family's next wedding or festival date "
                                      f"and invite them for the fitting. Ask {sp.loc[rm, 'name'].split()[0]} what he says."),
                         })
+
+    # --- category avoidance: share of a salesperson's bills containing a category vs the rest of their city (90 days)
+    bwc = bw.join(S[["city"]], on="store_id")
+    for cat in ["Kurta Set", "Jacket", "Mojari", "Sherwani"]:
+        has = bwc.cats.apply(lambda c: cat in c)
+        cat_lines = pw[pw.category == cat]
+        price = cat_lines.rev.sum() / max(cat_lines.qty.sum(), 1)
+        for city, g in bwc.groupby("city"):
+            hc = has[g.index]
+            per = pd.DataFrame({"sp": g.salesperson_id, "h": hc}).groupby("sp").h.agg(["sum", "count"])
+            for p, row in per[per["count"] >= 60].iterrows():
+                store = sp.loc[p, "store_id"]
+                if (T - S.loc[store].opened).days < STORE_WIN + BASE_WIN:
+                    continue
+                rate = row["sum"] / row["count"]
+                rest = hc[g.salesperson_id != p].mean()
+                if rest < 0.08 or rest - rate < 0.10 or rate > 0.6 * rest:
+                    continue
+                same = per.loc[[q for q in per.index if sp.loc[q, "store_id"] == store and q != p and per.loc[q, "count"] >= 30]]
+                if same.empty:
+                    continue
+                same = same.assign(rate=same["sum"] / same["count"]).sort_values("rate", ascending=False)
+                rm = same.index[0]
+                rupees = (rest - rate) * row["count"] * price * STORE_WIN / BEH_WIN
+                ex = g[(g.salesperson_id == p) & ~hc].index.tolist()
+                sp_issues.append({
+                    "id": f"{T.date()}-{p}-AVOID-{cat[:3].upper()}", "store_id": store, "salesperson_id": p, "lever": "Bigger baskets", "kpi": f"avoid:{cat}",
+                    "behaviour": f"Show {cat.lower()}s to every customer",
+                    "title": f"{sp.loc[p, 'name']} rarely sells {cat.lower()}s, which {city} buys",
+                    "cause": f"{int(row['sum'])} of {int(row['count'])} bills ({pct(rate)}) had a {cat.lower()}; other {city} salespeople {pct(rest)}.",
+                    "evidence": [f"Window {wstart.date()} to {T.date()} (90 days).", f"Same-store role model: {sp.loc[rm, 'name']} {int(same.loc[rm, 'sum'])} of {int(same.loc[rm, 'count'])} ({pct(same.loc[rm, 'rate'])})."],
+                    "receipts": ex[:12], "receipt_count": len(ex),
+                    "peer": {"id": rm, "name": sp.loc[rm, "name"], "num": int(same.loc[rm, "sum"]), "den": int(same.loc[rm, "count"])},
+                    "num": int(row["sum"]), "den": int(row["count"]), "rate": round(float(rate), 4), "peer_rate": round(float(rest), 4),
+                    "rupees": round(float(rupees)), "rupees_basis": f"({pct(rest)} − {pct(rate)}) × {int(row['count'])} bills × avg {cat.lower()} price {inr(price)}, scaled to 28 days. Hypothetical.",
+                    "card": (f"{sp.loc[p, 'name'].split()[0]}, {int(row['sum'])} of your {int(row['count'])} bills had a {cat.lower()} ({rate * 100:.0f}%); across {city} it is {rest * 100:.0f}%. "
+                             f"Today, walk every customer past the {cat.lower()} display and offer one trial. Ask {sp.loc[rm, 'name'].split()[0]} which styles sell."),
+                })
+
+    # --- market signal: a whole city slowing down is not one store's fault (routed, never alerted against a store)
+    for city, g in stores.groupby("city"):
+        ids = [s for s in g.store_id if s in cur.index and s in base.index and (T - S.loc[s].opened).days >= STORE_WIN + BASE_WIN]
+        if len(ids) < 2:
+            continue
+        state = g.state.iloc[0]
+        others = [s for s in stores[stores.state == state].store_id if s not in ids and s in cur.index and s in base.index]
+        cc = cur.loc[ids].conv_bills.sum() / cur.loc[ids].footfall.sum()
+        cb = base.loc[ids].conv_bills.sum() / base.loc[ids].footfall.sum()
+        ch = cc / cb - 1
+        drops = [(cur.loc[s].conv / base.loc[s].conv - 1) for s in ids]
+        if ch <= -0.10 and all(d <= -0.05 for d in drops):
+            oc = (cur.loc[others].conv_bills.sum() / cur.loc[others].footfall.sum()) / (base.loc[others].conv_bills.sum() / base.loc[others].footfall.sum()) - 1 if others else None
+            flags.append({"store_id": city, "type": "Market signal",
+                          "detail": f"All {len(ids)} {city} stores lost conversion together ({ch * 100:+.1f}% city-wide; every store between {min(drops) * 100:+.0f}% and {max(drops) * 100:+.0f}%)"
+                                    + (f"; rest of {state} {oc * 100:+.1f}%." if oc is not None else "."),
+                          "handling": "Treated as a market problem: no store or salesperson is blamed for it. Shown to the area manager as context only."})
 
     # validate cards; keep at most one card per salesperson (biggest rupees)
     valid = []
@@ -381,6 +438,14 @@ def detect(T):
     for am_id, am in AM.iterrows():
         mine = [i for i in issues if S.loc[i["store_id"], "area_manager_id"] == am_id]
         mine.sort(key=lambda i: -i["rupees"])
+        seen, dedup = set(), []
+        for i in mine:  # one issue per salesperson: their biggest, matching their single daily card
+            if i.get("salesperson_id"):
+                if i["salesperson_id"] in seen:
+                    continue
+                seen.add(i["salesperson_id"])
+            dedup.append(i)
+        mine = dedup
         digest[am_id] = {"name": am["name"], "city": am["city"], "stores": [s.strip() for s in am.stores.split(",")],
                          "issues": mine[:int(am.max_alerts_per_week)], "suppressed": len(mine[int(am.max_alerts_per_week):])}
 
