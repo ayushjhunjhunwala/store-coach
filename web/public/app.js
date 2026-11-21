@@ -124,6 +124,28 @@ document.addEventListener("click", async (e) => {
   } finally { b.disabled = false; b.textContent = label; }
 });
 
+// ---------- grounded AI explanation
+const explainButton = (id) => `<div data-explain-wrap="${esc(id)}" style="margin-top:10px"><button class="btn ghost" data-explain="${esc(id)}" style="padding:8px 14px">Explain this recommendation</button><div data-explain-out></div></div>`;
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-explain]");
+  if (!b) return;
+  const out = b.parentElement.querySelector("[data-explain-out]");
+  b.disabled = true; b.textContent = "Asking Sarvam AI to explain the evidence…";
+  try {
+    const r = await api("/api/ai/explain", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ issue_id: b.dataset.explain }) });
+    const cite = (ids) => (ids || []).map((x) => `<span class="tag" title="${esc((r.facts.find((f) => f.id === x) || {}).text || "")}">${esc(x)}</span>`).join("");
+    out.innerHTML = `<div class="card" style="margin-top:10px;box-shadow:none">
+      <p><b>What the data shows.</b> ${esc(r.observation)}</p>
+      <p><b>Check first.</b> ${esc(r.likely_check)}</p>
+      <p><b>Suggested coaching.</b> ${esc(r.coaching_text)}</p>
+      <p class="muted small"><b>Limits.</b> ${esc(r.limitations)}</p>
+      <p class="small">Evidence used: ${cite(r.evidence_ids)}</p>
+      <p class="small">${r.source === "ai" ? `<span class="tag teal">AI · ${esc(r.model)} · every number and name checked against the evidence${r.cached ? " · cached" : ""}</span>` : `<span class="tag warn">Template fallback · AI output not used: ${esc((r.failed_checks || []).join("; "))}</span>`}</p>
+      <details><summary class="small">Facts given to the model</summary><ul class="small">${r.facts.map((f) => `<li><b>${esc(f.id)}</b> ${esc(f.text)}</li>`).join("")}</ul></details></div>`;
+    b.remove();
+  } catch (err) { out.innerHTML = `<p class="error">${esc(err.message)} The evidence above is still complete.</p>`; b.disabled = false; b.textContent = "Explain this recommendation"; }
+});
+
 // ---------- action lifecycle (server enforces who may do what; buttons are only hints)
 let ACTIONS = {};
 async function loadActions(ids) {
@@ -361,6 +383,7 @@ const views = {
             ${i.receipts ? `<p class="mono">Source bills (${i.receipt_count}): ${i.receipts.map(esc).join(", ")}${i.receipt_count > i.receipts.length ? " …" : ""}</p>` : ""}
             ${i.salesperson_id ? `<p><a href="/am/cards?date=${date}&sp=${i.salesperson_id}" data-link>Open ${esc(i.owner)}'s coach card →</a></p>` : ""}
           </details>
+          ${explainButton(i.id)}
           ${followUp(i.follow_up)}
           <div style="margin-top:12px">${actionPanel(i.id)}</div>
         </section>`).join("")}`;
@@ -529,7 +552,7 @@ const views = {
         <div>
           <div class="eyebrow">${latest.card ? `Today's one thing · brief for ${esc(latest.replay_date)}` : "Today"}</div>
           ${latest.card ? `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)} · ${esc(latest.card.lever)}</div><p class="msg">${esc(latest.card.text)}</p><p class="small" style="color:#bfb3a2">${latest.card.words} words</p></div>
-            ${voiceBar(latest.card.issue_id)}<div style="margin-top:14px">${actionPanel(latest.card.issue_id)}</div>`
+            ${voiceBar(latest.card.issue_id)}${explainButton(latest.card.issue_id)}<div style="margin-top:14px">${actionPanel(latest.card.issue_id)}</div>`
           : `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)} · ${esc(({ maintain: "Practice focus", insufficient_evidence: "Not enough evidence yet", off_duty: "Off duty", no_roster: "No roster record", not_generated: "Not generated" })[latest.state?.state] || "Today")}</div><p class="msg">${esc(latest.state?.text || "No brief was generated for you on this date.")}</p></div>`}
         </div>
         <section class="card"><h3>You vs your store</h3><p class="muted small">Store column = average of everyone in ${esc(me.store_id)} over the same 90 days. Other people's names and numbers are not shown here.</p>
@@ -597,7 +620,7 @@ async function runCase() {
     <div class="grid2" style="margin-top:20px">
       <div><div class="eyebrow">Coach · daily employee card</div><h2>For ${esc(f.name)}, today</h2>
         <div class="phone"><div class="eyebrow">SUTRA · ${esc(s.store.store_id)}</div><p class="msg">${esc(r.card.text)}</p><p style="color:#bfb3a2" class="small">${r.card.words} words</p></div>${voiceBar(s.case_id)}</div>
-      <section class="card"><h3>Validated in code</h3><ul class="checks">${r.card.checks.map((c) => `<li class="${c.ok ? "" : "fail"}"><b>${c.ok ? "✓" : "✗"}</b><span>${esc(c.label)} <span class="muted">· ${esc(c.detail)}</span></span></li>`).join("")}</ul></section>
+      <section class="card"><h3>Validated in code</h3><ul class="checks">${r.card.checks.map((c) => `<li class="${c.ok ? "" : "fail"}"><b>${c.ok ? "✓" : "✗"}</b><span>${esc(c.label)} <span class="muted">· ${esc(c.detail)}</span></span></li>`).join("")}</ul>${explainButton(s.case_id)}</section>
     </div>
     <div class="grid2" style="margin-top:20px">
       <section class="card"><div class="eyebrow">Assign</div><h3>Mission</h3><p>Owner ${esc(f.name)} · what: a jacket with every kurta-set trial · when: today.</p>${ackButton(s.case_id)}</section>
