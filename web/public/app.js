@@ -118,7 +118,7 @@ document.addEventListener("click", async (e) => {
     const r = await api("/api/voice/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ issue_id: b.dataset.voice, lang }) });
     const mime = r.codec === "mp3" ? "audio/mpeg" : "audio/wav";
     out.innerHTML = `<audio controls autoplay src="data:${mime};base64,${r.audio_b64}" style="width:100%;max-width:360px"></audio>
-      <p style="margin:6px 0 0"><b>${esc(r.caption)}</b></p>${r.cached ? `<span class="tag">cached · no credits used</span>` : `<span class="tag teal">fresh from Sarvam</span>`}`;
+      <p style="margin:6px 0 0"><b>${esc(r.caption)}</b></p>${r.note ? `<p class="tag warn">${esc(r.note)}</p>` : ""}${r.cached ? `<span class="tag">cached · no credits used</span>` : `<span class="tag teal">fresh from Sarvam</span>`}`;
   } catch (err) {
     out.innerHTML = `<p class="error">${esc(err.message)} You can still read the card above.</p>`;
   } finally { b.disabled = false; b.textContent = label; }

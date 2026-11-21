@@ -181,7 +181,7 @@ export default {
           text = i.salesperson_id ? (RUNS[i.replay_date]?.cards?.[i.salesperson_id]?.text || i.action) : i.action;
         }
         const who = sess ? `${sess.role}:${sess.id}` : `ip:${(req.headers.get("cf-connecting-ip") || "?").slice(0, 45)}`;
-        const key = await hmac("voice-v1", `${lang}|${VOICES[lang]}|${text}`);
+        const key = await hmac("voice-v3", `${lang}|${VOICES[lang]}|${text}`);
         const hit = await env.DB.prepare("SELECT caption, codec, audio_b64 FROM voice_cache WHERE key = ?").bind(key).first();
         if (hit) {
           await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 1, 'ok')").bind(who, id, lang).run();
@@ -190,7 +190,7 @@ export default {
         const used = await env.DB.prepare("SELECT COUNT(*) AS n FROM voice_log WHERE who = ? AND cached = 0 AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')").bind(who).first();
         if (used.n >= 40) return bad("Daily voice limit reached for this user. The text card still works.", 429);
         const sarvam = (path, body) => fetch(`https://api.sarvam.ai${path}`, {
-          method: "POST", headers: { "api-subscription-key": env.SARVAM_API_KEY, "content-type": "application/json" },
+          method: "POST", headers: { "api-subscription-key": env.SARVAM_API_KEY.trim(), "content-type": "application/json" },
           body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
         });
         const fail = async (stage, r) => {
@@ -198,23 +198,33 @@ export default {
           await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 0, ?)").bind(who, id, lang, `${stage} ${detail}`.slice(0, 200)).run();
           return json({ error: `Voice unavailable (${stage}). The text card still works.`, detail }, 502);
         };
-        let caption = text;
+        let caption = text, note = null, speakLang = lang;
         if (lang !== "en-IN") {
-          let tr; try { tr = await sarvam("/translate", { input: text, source_language_code: "en-IN", target_language_code: lang, model: "mayura:v1", mode: "modern-colloquial", speaker_gender: "Male", numerals_format: "international" }); } catch { return fail("translate"); }
+          // "12 of 40" is ambiguous for the translator; "12 out of 40" is not
+          const input = text.replace(/(\d+) of/g, "$1 out of");
+          let tr; try { tr = await sarvam("/translate", { input, source_language_code: "en-IN", target_language_code: lang, model: "mayura:v1", mode: "modern-colloquial", speaker_gender: "Male", numerals_format: "international" }); } catch { return fail("translate"); }
           if (!tr.ok) return fail("translate", tr);
-          caption = (await tr.json()).translated_text || text;
+          let out = (await tr.json()).translated_text || "";
+          // Hindi "A में से B" means "A out of B" reversed (B is the total). Put each fraction back in the checked order.
+          if (lang === "hi-IN")
+            for (const [, a, b] of text.matchAll(/\b(\d+) of (?:your )?(\d+)/g))
+              out = out.replace(new RegExp(`(^|[^\d])${a} में से ${b}(?!\d)`), `$1${b} में से ${a}`);
+          // number check: every number in the checked card must survive translation exactly
+          const nums = (s) => (s.match(/\d+(?:\.\d+)?/g) || []).sort().join(",");
+          if (out && nums(out) === nums(text)) caption = out;
+          else { note = "Translation changed a number, so the checked English card is read instead."; speakLang = "en-IN"; }
         }
         let codec = "mp3", tts;
         try {
-          tts = await sarvam("/text-to-speech", { text: caption, language_code: lang, model: "bulbul:v4-flash", speaker: VOICES[lang], speech_sample_rate: 22050, output_audio_codec: "mp3" });
-          if (tts.status === 400) { codec = "wav"; tts = await sarvam("/text-to-speech", { text: caption, language_code: lang, model: "bulbul:v4-flash", speaker: VOICES[lang], speech_sample_rate: 22050 }); }
+          tts = await sarvam("/text-to-speech", { text: caption, language_code: speakLang, model: "bulbul:v4-flash", speaker: VOICES[speakLang], speech_sample_rate: 22050, output_audio_codec: "mp3" });
+          if (tts.status === 400) { codec = "wav"; tts = await sarvam("/text-to-speech", { text: caption, language_code: speakLang, model: "bulbul:v4-flash", speaker: VOICES[speakLang], speech_sample_rate: 22050 }); }
         } catch { return fail("tts"); }
         if (!tts.ok) return fail("tts", tts);
         const audio = ((await tts.json()).audios || [])[0];
         if (!audio) return fail("tts-empty");
         await env.DB.prepare("INSERT OR REPLACE INTO voice_cache (key, lang, caption, codec, audio_b64) VALUES (?, ?, ?, ?, ?)").bind(key, lang, caption, codec, audio).run();
         await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 0, 'ok')").bind(who, id, lang).run();
-        return json({ caption, source_text: text, lang, codec, audio_b64: audio, cached: false });
+        return json({ caption, source_text: text, lang: speakLang, note, codec, audio_b64: audio, cached: false });
       }
 
       // ----- salesperson portal: own data only
