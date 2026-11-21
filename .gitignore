@@ -25,3 +25,4 @@ web/.wrangler/
 node_modules/
 web/.build/
 web/pages/dist/
+web/pages/.wrangler/
