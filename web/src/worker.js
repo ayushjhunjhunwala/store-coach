@@ -163,6 +163,60 @@ export default {
         return json({ mission: await env.DB.prepare("SELECT * FROM missions WHERE issue_id = ?").bind(id).first() });
       }
 
+      // ----- Sarvam voice: the server chooses the text (a validated card), translates it, speaks it, caches the audio
+      if (p === "/api/voice/tts" && req.method === "POST") {
+        if (env.VOICE_ENABLED === "false") return bad("Voice is switched off", 503);
+        if (!env.SARVAM_API_KEY) return bad("Voice is not configured", 503);
+        let b; try { b = await req.json(); } catch { return bad("Body must be JSON"); }
+        const id = String(b?.issue_id || ""), lang = String(b?.lang || "hi-IN");
+        const VOICES = { "hi-IN": "aditya_hi_conversational", "en-IN": "simran_en_customer", "kn-IN": "chetan_kn_conversation" };
+        if (!VOICES[lang]) return bad("Language must be hi-IN, en-IN or kn-IN");
+        let text;
+        if (id === pat02.case_id) text = pat02Card(pat02).text;
+        else {
+          const i = ISSUES.get(id);
+          if (!i) return bad("Unknown issue id", 404);
+          if (!sess) return bad("Sign in to listen", 401);
+          if (sess.role === "sp" && i.salesperson_id !== sess.id) return bad("You can only listen to your own card", 403);
+          text = i.salesperson_id ? (RUNS[i.replay_date]?.cards?.[i.salesperson_id]?.text || i.action) : i.action;
+        }
+        const who = sess ? `${sess.role}:${sess.id}` : `ip:${(req.headers.get("cf-connecting-ip") || "?").slice(0, 45)}`;
+        const key = await hmac("voice-v1", `${lang}|${VOICES[lang]}|${text}`);
+        const hit = await env.DB.prepare("SELECT caption, codec, audio_b64 FROM voice_cache WHERE key = ?").bind(key).first();
+        if (hit) {
+          await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 1, 'ok')").bind(who, id, lang).run();
+          return json({ caption: hit.caption, source_text: text, lang, codec: hit.codec, audio_b64: hit.audio_b64, cached: true });
+        }
+        const used = await env.DB.prepare("SELECT COUNT(*) AS n FROM voice_log WHERE who = ? AND cached = 0 AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')").bind(who).first();
+        if (used.n >= 40) return bad("Daily voice limit reached for this user. The text card still works.", 429);
+        const sarvam = (path, body) => fetch(`https://api.sarvam.ai${path}`, {
+          method: "POST", headers: { "api-subscription-key": env.SARVAM_API_KEY, "content-type": "application/json" },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
+        });
+        const fail = async (stage, r) => {
+          const detail = r ? `${r.status} ${(await r.text()).slice(0, 160)}` : "timeout";
+          await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 0, ?)").bind(who, id, lang, `${stage} ${detail}`.slice(0, 200)).run();
+          return json({ error: `Voice unavailable (${stage}). The text card still works.`, detail }, 502);
+        };
+        let caption = text;
+        if (lang !== "en-IN") {
+          let tr; try { tr = await sarvam("/translate", { input: text, source_language_code: "en-IN", target_language_code: lang, model: "mayura:v1", mode: "modern-colloquial", speaker_gender: "Male", numerals_format: "international" }); } catch { return fail("translate"); }
+          if (!tr.ok) return fail("translate", tr);
+          caption = (await tr.json()).translated_text || text;
+        }
+        let codec = "mp3", tts;
+        try {
+          tts = await sarvam("/text-to-speech", { text: caption, language_code: lang, model: "bulbul:v4-flash", speaker: VOICES[lang], speech_sample_rate: 22050, output_audio_codec: "mp3" });
+          if (tts.status === 400) { codec = "wav"; tts = await sarvam("/text-to-speech", { text: caption, language_code: lang, model: "bulbul:v4-flash", speaker: VOICES[lang], speech_sample_rate: 22050 }); }
+        } catch { return fail("tts"); }
+        if (!tts.ok) return fail("tts", tts);
+        const audio = ((await tts.json()).audios || [])[0];
+        if (!audio) return fail("tts-empty");
+        await env.DB.prepare("INSERT OR REPLACE INTO voice_cache (key, lang, caption, codec, audio_b64) VALUES (?, ?, ?, ?, ?)").bind(key, lang, caption, codec, audio).run();
+        await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 0, 'ok')").bind(who, id, lang).run();
+        return json({ caption, source_text: text, lang, codec, audio_b64: audio, cached: false });
+      }
+
       // ----- salesperson portal: own data only
       if (p === "/api/sp/me") {
         if (!sess || sess.role !== "sp") return bad("Salesperson sign-in required", 401);

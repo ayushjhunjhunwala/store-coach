@@ -99,6 +99,31 @@ document.addEventListener("click", async (e) => {
   }
 });
 
+// ---------- Sarvam voice: "Listen to my mission"
+function voiceBar(issueId) {
+  return `<div class="voice" data-voice-wrap="${esc(issueId)}" style="margin-top:14px">
+    <div class="row-flex" style="align-items:center;justify-content:flex-start;gap:8px">
+      <select class="ctl" data-voice-lang aria-label="Language"><option value="hi-IN">हिन्दी Hindi</option><option value="en-IN">English</option><option value="kn-IN">ಕನ್ನಡ Kannada</option></select>
+      <button class="btn gold" data-voice="${esc(issueId)}" style="background:var(--gold);color:#211b1c">▶ Listen to my mission</button>
+    </div>
+    <div data-voice-out class="small" style="margin-top:10px"></div>
+    <div class="muted small">Voice by Sarvam AI (Bulbul). Numbers come from the checked card; the voice only reads them.</div></div>`;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-voice]");
+  if (!b) return;
+  const wrap = b.closest("[data-voice-wrap]"), out = wrap.querySelector("[data-voice-out]"), lang = wrap.querySelector("[data-voice-lang]").value;
+  b.disabled = true; const label = b.textContent; b.textContent = "Preparing audio…"; out.innerHTML = "";
+  try {
+    const r = await api("/api/voice/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ issue_id: b.dataset.voice, lang }) });
+    const mime = r.codec === "mp3" ? "audio/mpeg" : "audio/wav";
+    out.innerHTML = `<audio controls autoplay src="data:${mime};base64,${r.audio_b64}" style="width:100%;max-width:360px"></audio>
+      <p style="margin:6px 0 0"><b>${esc(r.caption)}</b></p>${r.cached ? `<span class="tag">cached · no credits used</span>` : `<span class="tag teal">fresh from Sarvam</span>`}`;
+  } catch (err) {
+    out.innerHTML = `<p class="error">${esc(err.message)} You can still read the card above.</p>`;
+  } finally { b.disabled = false; b.textContent = label; }
+});
+
 // ---------- small components
 function delta(cur, prev, kind) {
   if (cur == null || prev == null || !prev) return `<span class="delta flat">—</span>`;
@@ -315,7 +340,7 @@ const views = {
       ${c ? `<div class="grid2" style="margin-top:20px">
         <div class="phone"><div class="eyebrow">SUTRA · ${esc(c.store_id)} · ${esc(c.lever)}</div><p class="msg">${esc(c.text)}</p><p style="color:#bfb3a2" class="small">${c.words} words</p></div>
         <section class="card"><h3>Checks passed before sending</h3><ul class="checks">${Object.entries(c.checks).map(([k, v]) => `<li class="${v ? "" : "fail"}"><b>${v ? "✓" : "✗"}</b>${esc(k)}</li>`).join("")}</ul>
-        <p style="margin-top:16px">${ackButton(c.issue_id)}</p></section></div>` : `<div class="card">No cards on this date.</div>`}`;
+        ${voiceBar(c.issue_id)}<p style="margin-top:16px">${ackButton(c.issue_id)}</p></section></div>` : `<div class="card">No cards on this date.</div>`}`;
     const go = () => nav(`/am/cards?date=${document.getElementById("date").value}&sp=${document.getElementById("sp").value}`);
     document.getElementById("sp").onchange = go;
     document.getElementById("date").onchange = () => nav(`/am/cards?date=${document.getElementById("date").value}`);
@@ -448,7 +473,7 @@ const views = {
         <div>
           <div class="eyebrow">${latest.card ? `Today's one thing · brief for ${esc(latest.replay_date)}` : "Today"}</div>
           ${latest.card ? `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)} · ${esc(latest.card.lever)}</div><p class="msg">${esc(latest.card.text)}</p><p class="small" style="color:#bfb3a2">${latest.card.words} words</p></div>
-            <div style="margin-top:14px">${ackButton(latest.card.issue_id)}</div>`
+            ${voiceBar(latest.card.issue_id)}<div style="margin-top:14px">${ackButton(latest.card.issue_id)}</div>`
           : `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)}</div><p class="msg">${esc(me.name.split(" ")[0])}, nothing to fix today: every lever is within range of your store. Keep doing what you are doing.</p></div>`}
         </div>
         <section class="card"><h3>You vs your store</h3><p class="muted small">Store column = average of everyone in ${esc(me.store_id)} over the same 90 days. Other people's names and numbers are not shown here.</p>
@@ -515,7 +540,7 @@ async function runCase() {
     </section>
     <div class="grid2" style="margin-top:20px">
       <div><div class="eyebrow">Coach · daily employee card</div><h2>For ${esc(f.name)}, today</h2>
-        <div class="phone"><div class="eyebrow">SUTRA · ${esc(s.store.store_id)}</div><p class="msg">${esc(r.card.text)}</p><p style="color:#bfb3a2" class="small">${r.card.words} words</p></div></div>
+        <div class="phone"><div class="eyebrow">SUTRA · ${esc(s.store.store_id)}</div><p class="msg">${esc(r.card.text)}</p><p style="color:#bfb3a2" class="small">${r.card.words} words</p></div>${voiceBar(s.case_id)}</div>
       <section class="card"><h3>Validated in code</h3><ul class="checks">${r.card.checks.map((c) => `<li class="${c.ok ? "" : "fail"}"><b>${c.ok ? "✓" : "✗"}</b><span>${esc(c.label)} <span class="muted">· ${esc(c.detail)}</span></span></li>`).join("")}</ul></section>
     </div>
     <div class="grid2" style="margin-top:20px">
