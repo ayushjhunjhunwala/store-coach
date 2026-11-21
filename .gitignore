@@ -14,3 +14,9 @@ dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# organiser-supplied raw data (not ours to republish)
+manyavar-vch3-data/
+*.zip
+*.xlsx
+__pycache__/
