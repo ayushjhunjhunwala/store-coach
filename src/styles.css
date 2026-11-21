@@ -1,0 +1,293 @@
+/*
+ * Tailwind v4 entry: config lives here, with no tailwind.config.js or PostCSS plugin.
+ * Keep every @import in this top block. Web fonts load via <link> in src/routes/__root.tsx.
+ */
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Store Coach design system — clean retail-ops look from the design file.
+ * Light grey page, white 24px cards, system blue for actions, pill buttons,
+ * SF / Inter type with tight headlines. All colours are oklch tokens.
+ */
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-sm: calc(var(--radius) - 14px);
+  --radius-md: calc(var(--radius) - 12px);
+  --radius-lg: calc(var(--radius) - 10px);
+  --radius-xl: calc(var(--radius) - 8px);
+  --radius-2xl: calc(var(--radius) - 4px);
+  --radius-3xl: var(--radius);
+  --radius-4xl: calc(var(--radius) + 8px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Semantic tones */
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-live: var(--live);
+  --color-surface: var(--surface);
+  --color-chart-soft: var(--chart-soft);
+  --color-chart-dim: var(--chart-dim);
+}
+
+:root {
+  --radius: 1.5rem;
+
+  --background: oklch(0.97 0.002 286);
+  --foreground: oklch(0.2 0.004 286);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--foreground);
+  --surface: oklch(1 0 0);
+
+  --primary: oklch(0.57 0.2 256);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.96 0.002 286);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.96 0.002 286);
+  --muted-foreground: oklch(0.52 0.008 286);
+  --accent: oklch(0.95 0.003 286);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.55 0.2 27);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.92 0.003 286);
+  --input: oklch(0.86 0.005 286);
+  --ring: oklch(0.57 0.2 256 / 0.45);
+
+  --info: oklch(0.5 0.16 256);
+  --info-soft: oklch(0.95 0.025 256);
+  --warn: oklch(0.47 0.12 55);
+  --warn-soft: oklch(0.96 0.03 70);
+  --good: oklch(0.5 0.13 150);
+  --good-soft: oklch(0.95 0.04 150);
+  --bad: oklch(0.52 0.19 27);
+  --bad-soft: oklch(0.95 0.03 25);
+  --live: oklch(0.72 0.19 147);
+  --chart-soft: oklch(0.88 0.045 256);
+  --chart-dim: oklch(0.86 0.006 286);
+
+  --chart-1: var(--primary);
+  --chart-2: oklch(0.7 0.006 286);
+  --chart-3: var(--warn);
+  --chart-4: var(--good);
+  --chart-5: var(--bad);
+
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--secondary);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+
+  --shadow-card: 0 1px 2px oklch(0.2 0.01 286 / 0.04), 0 12px 32px -20px oklch(0.2 0.01 286 / 0.18);
+  --shadow-float: 0 2px 6px oklch(0.2 0.01 286 / 0.06), 0 24px 48px -24px oklch(0.2 0.01 286 / 0.3);
+  --shadow-fab: 0 10px 28px -8px oklch(0.57 0.2 256 / 0.55);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+
+  ::selection {
+    background: var(--info-soft);
+  }
+}
+
+/* White rounded card on the grey page */
+@utility surface {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+@utility shadow-card {
+  box-shadow: var(--shadow-card);
+}
+
+@utility shadow-float {
+  box-shadow: var(--shadow-float);
+}
+
+@utility shadow-fab {
+  box-shadow: var(--shadow-fab);
+}
+
+/* Big page headline: "3 issues. ₹4.2L at stake." */
+@utility headline {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.04;
+}
+
+/* Large tabular figures: rupees, KPIs */
+@utility figure {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility live-dot {
+  position: relative;
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 9999px;
+  background: var(--live);
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--live);
+    animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+}
+
+@keyframes live-ping {
+  75%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-rise {
+  animation: rise-in 0.35s ease-out both;
+}
+
+@keyframes typing-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@utility typing-dot {
+  animation: typing-dot 1.2s infinite ease-in-out;
+}
+
+/* Replay marker: a still dot for historical replay; it only pulses while playing. */
+@utility replay-dot {
+  position: relative;
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+  &[data-playing="true"] {
+    background: var(--primary);
+  }
+  &[data-playing="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--primary);
+    animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
