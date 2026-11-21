@@ -455,7 +455,8 @@ def detect(T):
         mine = sorted([i for i in valid if i["salesperson_id"] == p], key=lambda i: -i["rupees"])
         if mine:
             cards[p] = {"name": sp.loc[p, "name"], "store_id": sp.loc[p, "store_id"], "issue_id": mine[0]["id"], "text": mine[0]["card"],
-                        "words": word_count(mine[0]["card"]), "lever": mine[0]["lever"], "checks": mine[0]["checks"]}
+                        "words": word_count(mine[0]["card"]), "lever": mine[0]["lever"], "checks": mine[0]["checks"],
+                        "kpi": mine[0]["kpi"], "rate": mine[0]["rate"]}
     return {"replay_date": T.date().isoformat(), "digest": digest, "cards": cards, "flags": flags,
             "counts": {"issues_found": len(issues), "cards": len(cards), "flags": len(flags)}}
 
@@ -482,6 +483,12 @@ def follow_up(issue, T):
         n, den = int(el.cats.apply(lambda c: any(a in c for a in addons)).sum()), len(el)
         new = n / den if den else None
         old = issue["rate"]
+    elif k.startswith("avoid"):
+        cat = k.split(":")[1]
+        el = nb[nb.salesperson_id == issue["salesperson_id"]]
+        n, den = int(el.cats.apply(lambda c: cat in c).sum()), len(el)
+        new = n / den if den else None
+        old = issue["rate"]
     elif k == "discount":
         g = prod[(prod.d >= s) & (prod.d <= e) & (prod.salesperson_id == issue["salesperson_id"])]
         den = int(g.qty.sum())
@@ -495,7 +502,7 @@ def follow_up(issue, T):
                 "note": f"Store bills in the 7 days after: {n} vs {len(prior)} in the 7 days before. Observation only, not proof of cause."}
     else:
         return {"status": "Not measurable in 7 days", "reason": "Repeat needs 30+ days to observe a return visit."}
-    if new is None or den < 5:
+    if new is None or den < 8:
         return {"status": "No detectable change", "reason": f"Too little activity in {s.date()}–{e.date()} (n={den}).", "window": [str(s.date()), str(e.date())]}
     delta = new - old
     better = delta < 0 if k == "discount" else delta > 0
@@ -511,6 +518,8 @@ for T in DATES:
     for am in r["digest"].values():
         for i in am["issues"]:
             i["follow_up"] = follow_up(i, T)
+    for p, c in r["cards"].items():
+        c["follow_up"] = follow_up({**c, "salesperson_id": p}, T)
     runs.append(r)
     print(T, r["counts"], {k: [(i["store_id"], i["kpi"], i["rupees"]) for i in v["issues"]] for k, v in r["digest"].items()})
 

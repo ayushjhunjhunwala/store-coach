@@ -164,7 +164,7 @@ function followUp(f) {
   let s = `<span class="tag ${cls}">7-day follow-up: ${esc(f.status)}</span>`;
   if (f.before !== undefined && f.after !== undefined) {
     const fmt = (v) => (v <= 1 && v >= 0 && !Number.isInteger(v) ? pct(v) : v);
-    s += `<span class="muted small"> ${esc(fmt(f.before))} → ${esc(fmt(f.after))} (${esc(f.window?.join(" to "))})</span>`;
+    s += `<span class="muted small"> ${esc(fmt(f.before))} → ${esc(fmt(f.after))} (${esc(f.window?.join(" to "))}${f.den ? `, n=${f.den}` : ""})</span>`;
   }
   if (f.reason) s += `<div class="muted small">${esc(f.reason)}</div>`;
   if (f.note) s += `<div class="muted small">${esc(f.note)}</div>`;
@@ -468,7 +468,7 @@ const views = {
         <section class="card"><h3>My card history</h3><p class="muted small">One brief per replay date. Follow-ups are measured only where the next 7 days exist in the data.</p>
           <table><tr><th>Brief</th><th>Card</th><th>Status</th></tr>
           ${v.cards.map((c) => `<tr><td class="small">${esc(c.replay_date)}</td><td class="small">${c.card ? esc(c.card.text) : '<span class="muted">No card: within range</span>'}</td>
-            <td class="small">${c.card ? (v.missions[c.card.issue_id] ? '<span class="ok">✓ acknowledged</span>' : '<span class="muted">open</span>') + (v.follow[c.card.issue_id] ? `<div>${esc(v.follow[c.card.issue_id].status)}</div>` : "") : ""}</td></tr>`).join("")}</table></section>
+            <td class="small">${c.card ? (v.missions[c.card.issue_id] ? '<span class="ok">✓ acknowledged</span>' : '<span class="muted">open</span>') + ((v.follow[c.card.issue_id] || c.card.follow_up) ? `<div>${esc((v.follow[c.card.issue_id] || c.card.follow_up).status)}${(v.follow[c.card.issue_id] || c.card.follow_up).after !== undefined ? ` · ${pct((v.follow[c.card.issue_id] || c.card.follow_up).before)} → ${pct((v.follow[c.card.issue_id] || c.card.follow_up).after)}` : ""}</div>` : "") : ""}</td></tr>`).join("")}</table></section>
         <section class="card"><h3>My recent bills</h3><div class="scroll"><table><tr><th>Bill</th><th>Date</th><th>Items</th><th class="num">Value</th></tr>
           ${me.recent_bills.map((b) => `<tr><td class="mono">${esc(b.bill_id)}</td><td class="small">${esc(b.date)}</td><td class="small">${esc(b.categories.join(", "))}</td><td class="num">${inr(b.value)}</td></tr>`).join("")}</table></div></section>
       </div>`;

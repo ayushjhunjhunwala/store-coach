@@ -83,7 +83,7 @@ function personalView(pid) {
   const cards = briefs.runs.map((r) => {
     const c = r.cards[pid];
     if (!c) return { replay_date: r.replay_date, card: null };
-    return { replay_date: r.replay_date, card: { issue_id: c.issue_id, text: c.text, words: c.words, lever: c.lever, checks: c.checks } };
+    return { replay_date: r.replay_date, card: { issue_id: c.issue_id, text: c.text, words: c.words, lever: c.lever, checks: c.checks, follow_up: c.follow_up } };
   });
   // follow-up for this person's issues where the manager digest measured one
   const follow = {};
