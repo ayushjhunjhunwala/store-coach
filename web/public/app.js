@@ -38,7 +38,7 @@ const RAIL = {
 function paintChrome() {
   const pills = document.getElementById("pills"), who = document.getElementById("who"), rail = document.getElementById("rail");
   let links = [];
-  if (SESSION?.role === "am") links = [["/am", "Command Centre", "home"], ["/am/stores", "Stores", "store"], ["/am/missions", "Rescue Missions", "target"], ["/am/cards", "Coach Cards", "card"], ["/am/insights", "Insights", "chart"]];
+  if (SESSION?.role === "am") links = [["/am", "Morning brief", "home"], ["/am/missions", "Actions", "target"], ["/am/cards", "Staff focus", "card"], ["/am/stores", "Stores", "store"], ["/am/insights", "Data & follow-up", "chart"]];
   else if (SESSION?.role === "sp") links = [["/sp", "My Coach", "card"], ["/demo", "Live case", "spark"]];
   else links = [["/", "Home", "home"], ["/demo", "Live case", "spark"], ["/login/am", "Area Manager portal", "target"], ["/login/sp", "Salesperson portal", "card"]];
   pills.innerHTML = links.map(([h, l]) => `<a href="${h}" data-link>${l}</a>`).join("");
@@ -122,6 +122,53 @@ document.addEventListener("click", async (e) => {
   } catch (err) {
     out.innerHTML = `<p class="error">${esc(err.message)} You can still read the card above.</p>`;
   } finally { b.disabled = false; b.textContent = label; }
+});
+
+// ---------- action lifecycle (server enforces who may do what; buttons are only hints)
+let ACTIONS = {};
+async function loadActions(ids) {
+  ids = ids.filter(Boolean);
+  if (!ids.length || !SESSION) return;
+  const r = await api(`/api/actions?ids=${encodeURIComponent(ids.join(","))}`).catch(() => ({ actions: {} }));
+  Object.assign(ACTIONS, r.actions);
+}
+const STATUS_LABEL = { new: "New", accepted: "Accepted", blocked: "Blocked", attempted: "Tried / done", reviewed: "Reviewed by manager", dismissed: "Dismissed" };
+const BLOCKERS = [["stock_or_size_unavailable", "Stock or size not available"], ["peer_unavailable", "Peer not available"], ["wrong_attribution", "Bills wrongly attributed to me"], ["too_few_relevant_customers", "Too few relevant customers"], ["action_unsuitable", "Action not suitable"], ["other", "Other"]];
+function actionPanel(id) {
+  const a = ACTIONS[id] || { status: "new", version: 0, events: [] };
+  const am = SESSION?.role === "am", sp = SESSION?.role === "sp";
+  const btn = (to, label, cls = "btn") => `<button class="${cls}" data-act="${esc(id)}" data-to="${to}" style="padding:9px 16px">${label}</button>`;
+  const opts = [];
+  if (["new", "blocked"].includes(a.status)) opts.push(btn("accepted", sp ? "I'll do this today" : "Accept"));
+  if (a.status === "accepted" && sp) opts.push(btn("attempted", "I tried it"));
+  if (a.status === "accepted" && am) opts.push(btn("attempted", "Mark tried (store action)", "btn ghost"));
+  if (["new", "accepted"].includes(a.status) && sp) opts.push(`<select class="ctl" data-blocker="${esc(id)}" aria-label="Blocker reason"><option value="">Something is stopping me…</option>${BLOCKERS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>`);
+  if (a.status === "attempted" && am) opts.push(btn("reviewed", "Mark reviewed"));
+  if (["new", "accepted", "blocked"].includes(a.status) && am) opts.push(btn("dismissed", "Dismiss…", "btn ghost"));
+  const hist = a.events.length ? `<details><summary>History (${a.events.length})</summary><ul class="small">${a.events.map((e) => `<li>${esc(ist(e.created_at))}: ${esc(STATUS_LABEL[e.from_status] || e.from_status)} → <b>${esc(STATUS_LABEL[e.to_status] || e.to_status)}</b> by ${esc(e.actor.split(":").slice(2).join(":") || e.actor)}${e.reason ? ` · ${esc(e.reason.replace(/_/g, " "))}` : ""}</li>`).join("")}</ul></details>` : "";
+  return `<div data-action-wrap="${esc(id)}"><span class="tag ${a.status === "blocked" ? "warn" : a.status === "new" ? "maroon" : "teal"}">Action: ${esc(STATUS_LABEL[a.status] || a.status)}</span>
+    <div class="row-flex" style="justify-content:flex-start;gap:8px;margin-top:8px">${opts.join("") || '<span class="muted small">No further step for your role.</span>'}</div>${hist}<div data-act-msg class="small" role="status"></div></div>`;
+}
+async function transition(id, to, reason) {
+  const wrap = document.querySelector(`[data-action-wrap="${CSS.escape(id)}"]`);
+  const msg = wrap?.querySelector("[data-act-msg]");
+  try {
+    await api("/api/actions/transition", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ issue_id: id, to, reason, version: (ACTIONS[id] || { version: 0 }).version }) });
+  } catch (e) { if (msg) msg.innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  await loadActions([id]);
+  if (wrap) wrap.outerHTML = actionPanel(id);
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  let reason;
+  if (b.dataset.to === "dismissed") { reason = prompt("Why dismiss this issue? (short reason)"); if (!reason) return; }
+  b.disabled = true;
+  transition(b.dataset.act, b.dataset.to, reason);
+});
+document.addEventListener("change", (e) => {
+  const s = e.target.closest("[data-blocker]");
+  if (s && s.value) transition(s.dataset.blocker, "blocked", s.value);
 });
 
 // ---------- small components
@@ -215,14 +262,14 @@ const views = {
     app.innerHTML = `
       <section class="hero">${archSVG}
         <div class="hello">Good morning${am ? ", " + esc(am.name.split(" ")[0]) : ""}</div>
-        <h1>Command Centre</h1>
-        <p class="sub">${am ? `${esc(am.city)} · ${ids.length} stores` : "All 20 stores · 6 cities"} · last 28 days to ${esc(s.as_of)}, compared with the 28 days before. Your brief was prepared at 06:00 without anyone asking.</p>
+        <h1>Morning brief</h1>
+        <p class="sub">${am ? `${esc(am.city)} · ${ids.length} stores` : "All 20 stores · 6 cities"} · last 28 days to ${esc(s.as_of)}, compared with the 28 days before. Historical replay: the data pack ends 31 Oct 2026, so this is the brief for that date.</p>
       </section>
       <div class="grid4">
         ${kpi("bag", "Total sales", inrShort(c.sales), delta(c.sales, p.sales), "vs prior 28 days")}
         ${kpi("target", "Conversion rate", pct(c.conversion), delta(c.conversion, p.conversion, "pp"), `${c.bills.toLocaleString("en-IN")} bills / ${c.footfall.toLocaleString("en-IN")} walk-ins`)}
         ${kpi("receipt", "Avg. bill value", inr(c.atv), delta(c.atv, p.atv), `${c.ipb.toFixed(2)} items per bill`)}
-        ${kpi("people", "Repeat rate", pct(c.repeat), `<span class="delta flat">${c.repeat_n.toLocaleString("en-IN")} customers</span>`, "came back 30+ days later")}
+        ${kpi("people", "Repeat rate", pct(c.repeat), `<span class="delta flat">${c.repeat_num.toLocaleString("en-IN")} of ${c.repeat_den.toLocaleString("en-IN")}</span>`, "eligible customers billed again 30+ days after their first bill")}
       </div>
       ${featured ? `<section class="card featured">
         <div><div class="eyebrow">Featured opportunity</div><div class="code">${esc(featured.code)}</div><div class="muted">${esc(featured.line)}</div></div>
@@ -292,18 +339,19 @@ const views = {
     let am = qs.get("am") || (SCOPE === "network" ? "AM-03" : SCOPE);
     const [brief] = await Promise.all([get(`/api/brief?date=${date}`), missions()]);
     const d = brief.digest[am];
+    await loadActions(d.issues.map((i) => i.id));
     const opts = Object.entries(brief.digest).map(([k, v]) => `<option value="${k}" ${k === am ? "selected" : ""}>${esc(v.name)} · ${esc(v.city)}</option>`).join("");
     const dopts = m.dates.map((x) => `<option ${x === date ? "selected" : ""}>${x}</option>`).join("");
     const market = brief.flags.filter((f) => f.type === "Market signal" && d.city === f.store_id);
     app.innerHTML = `
-      <div class="eyebrow">Rescue missions · weekly digest · at most 5, ranked by rupees</div>
+      <div class="eyebrow">Actions · at most ${d.budget} new issues per manager in any 7 days · ongoing issues update without using the budget</div>
       <div class="row-flex"><h1>${esc(d.name)}</h1><div><select class="ctl" id="am">${opts}</select> <select class="ctl" id="date" aria-label="Replay date">${dopts}</select></div></div>
-      <p class="sub">${esc(d.city)} · stores ${esc(d.stores.join(", "))} · brief for ${esc(date)}${d.suppressed ? ` · ${d.suppressed} lower-value issue(s) held back to respect the 5-alert limit` : ""}. Pick an earlier date to see the 7-day follow-up measured on real later data.</p>
+      <p class="sub">${esc(d.city)} · stores ${esc(d.stores.join(", "))} · brief for ${esc(date)} · <b>${d.new_count} new</b> this week (budget ${d.budget})${d.suppressed ? ` · ${d.suppressed} new issue(s) held back by the weekly budget` : ""}. Pick an earlier date to see the 7-day follow-up measured on real later data. Historical replays observed no real action execution.</p>
       ${market.map((f) => `<div class="card" style="margin-top:12px"><span class="tag warn">Market signal</span> ${esc(f.detail)} <div class="muted small">${esc(f.handling)}</div></div>`).join("")}
       ${d.issues.length ? "" : `<div class="card" style="margin-top:16px"><h3>No store needs attention this week</h3><p class="muted">Every lever is within its fair range against own history and same-state peers. Nothing is sent.</p></div>`}
       ${d.issues.map((i, n) => `
         <section class="card issue" style="animation-delay:${n * 50}ms">
-          <div class="row-flex"><div><span class="tag maroon">${esc(i.lever)}</span><span class="tag">${esc(i.store_id)}</span><h3>${esc(i.title)}</h3></div>
+          <div class="row-flex"><div><span class="tag maroon">${esc(i.lever)}</span><span class="tag">${esc(i.store_id)}</span>${i.alert === "new" ? `<span class="tag teal">New this week</span>` : `<span class="tag">Ongoing since ${esc(i.first_raised)}</span>`}<h3>${esc(i.title)}</h3></div>
           <div class="rupees" title="${esc(i.rupees_basis)}">${inr(i.rupees)}<div class="muted small" style="font-family:var(--sans);font-weight:400">at stake / 28 days · estimate</div></div></div>
           <p><b>Cause.</b> ${esc(i.cause)}</p>
           <p><b>Action.</b> ${esc(i.action)}</p>
@@ -314,7 +362,7 @@ const views = {
             ${i.salesperson_id ? `<p><a href="/am/cards?date=${date}&sp=${i.salesperson_id}" data-link>Open ${esc(i.owner)}'s coach card →</a></p>` : ""}
           </details>
           ${followUp(i.follow_up)}
-          <div style="margin-top:12px">${ackButton(i.id)}</div>
+          <div style="margin-top:12px">${actionPanel(i.id)}</div>
         </section>`).join("")}`;
     const go = () => nav(`/am/missions?am=${document.getElementById("am").value}&date=${document.getElementById("date").value}`);
     document.getElementById("am").onchange = go;
@@ -325,25 +373,32 @@ const views = {
     const m = await get("/api/meta");
     const qs = new URLSearchParams(location.search);
     const date = qs.get("date") || m.latest;
-    const [brief, s] = await Promise.all([get(`/api/brief?date=${date}`), get("/api/stores"), missions()]);
+    const [brief, s] = await Promise.all([get(`/api/brief?date=${date}`), get("/api/stores")]);
     const inScope = storesIn(s, SCOPE);
-    let ids = Object.keys(brief.cards).filter((p) => inScope.includes(brief.cards[p].store_id));
-    if (!ids.length) ids = Object.keys(brief.cards);
-    const sel = qs.get("sp") && brief.cards[qs.get("sp")] ? qs.get("sp") : ids[0];
-    const c = brief.cards[sel];
+    const LABEL = { improvement: "Improvement card", maintain: "Practice focus", insufficient_evidence: "Not enough evidence", off_duty: "Off duty", no_roster: "No roster record" };
+    const people = Object.entries(brief.states).filter(([, x]) => inScope.includes(x.store_id));
+    const counts = {}; for (const [, x] of people) counts[x.state] = (counts[x.state] || 0) + 1;
+    const filter = qs.get("state") || "improvement";
+    const list = people.filter(([, x]) => filter === "all" || x.state === filter);
+    const sel = qs.get("sp") && brief.states[qs.get("sp")] ? qs.get("sp") : (list[0] || [])[0];
+    const st = sel ? brief.states[sel] : null, c = sel ? brief.cards[sel] : null;
+    if (c) await loadActions([c.issue_id]);
     const dopts = m.dates.map((x) => `<option ${x === date ? "selected" : ""}>${x}</option>`).join("");
-    const sopts = ids.map((p) => `<option value="${p}" ${p === sel ? "selected" : ""}>${esc(brief.cards[p].name)} · ${esc(brief.cards[p].store_id)}</option>`).join("");
     app.innerHTML = `
-      <div class="eyebrow">Coach cards · one behaviour, one same-store peer, one action today</div>
-      <div class="row-flex"><h1>Today's one thing</h1><div><select class="ctl" id="sp">${sopts}</select> <select class="ctl" id="date">${dopts}</select></div></div>
-      <p class="sub">${Object.keys(brief.cards).length} salespeople rostered on ${esc(date)} get a card. Everyone else on the floor is within range, so they get no nagging.</p>
-      ${c ? `<div class="grid2" style="margin-top:20px">
-        <div class="phone"><div class="eyebrow">SUTRA · ${esc(c.store_id)} · ${esc(c.lever)}</div><p class="msg">${esc(c.text)}</p><p style="color:#bfb3a2" class="small">${c.words} words</p></div>
-        <section class="card"><h3>Checks passed before sending</h3><ul class="checks">${Object.entries(c.checks).map(([k, v]) => `<li class="${v ? "" : "fail"}"><b>${v ? "✓" : "✗"}</b>${esc(k)}</li>`).join("")}</ul>
-        ${voiceBar(c.issue_id)}<p style="margin-top:16px">${ackButton(c.issue_id)}</p></section></div>` : `<div class="card">No cards on this date.</div>`}`;
-    const go = () => nav(`/am/cards?date=${document.getElementById("date").value}&sp=${document.getElementById("sp").value}`);
-    document.getElementById("sp").onchange = go;
-    document.getElementById("date").onchange = () => nav(`/am/cards?date=${document.getElementById("date").value}`);
+      <div class="eyebrow">Staff focus · every active salesperson gets one honest state for ${esc(date)}</div>
+      <div class="row-flex"><h1>Staff focus</h1><div><select class="ctl" id="date" aria-label="Brief date">${dopts}</select></div></div>
+      <p class="sub">${people.length} salespeople with bills in the last 90 days in this focus. No card never means "on track": each person is in exactly one state below.</p>
+      <div class="row-flex" style="justify-content:flex-start;gap:6px;margin:14px 0">${["improvement", "maintain", "insufficient_evidence", "off_duty", "no_roster", "all"].map((k) =>
+        `<a class="tag ${k === filter ? "maroon" : ""}" href="/am/cards?date=${date}&state=${k}" data-link ${k === filter ? 'aria-current="true"' : ""}>${k === "all" ? "All" : LABEL[k]} · ${k === "all" ? people.length : counts[k] || 0}</a>`).join("")}</div>
+      <div class="grid2">
+        <section class="card scroll"><table><tr><th>Salesperson</th><th>Store</th><th class="num">Bills 90d</th><th>State</th></tr>
+          ${list.map(([pid, x]) => `<tr><td><a href="/am/cards?date=${date}&state=${filter}&sp=${pid}" data-link ${pid === sel ? 'aria-current="true"' : ""}>${esc(m.people?.[pid] || pid)}${pid === sel ? " ◂" : ""}</a></td><td>${esc(x.store_id)}</td><td class="num">${x.bills_90d}</td><td class="small">${esc(LABEL[x.state])}</td></tr>`).join("") || `<tr><td colspan=4 class="muted">Nobody in this state.</td></tr>`}</table></section>
+        <div>${st ? `
+          <div class="phone"><div class="eyebrow">SUTRA · ${esc(st.store_id)} · ${esc(LABEL[st.state])}</div><p class="msg">${esc(st.text)}</p>${c ? `<p style="color:#bfb3a2" class="small">${c.words} words</p>` : ""}</div>
+          ${c ? `<section class="card" style="margin-top:14px"><h3>Checked in code before sending</h3><ul class="checks">${Object.entries(c.checks).map(([k, v]) => `<li class="${v ? "" : "fail"}"><b>${v ? "✓" : "✗"}</b>${esc(k)}</li>`).join("")}</ul>
+          ${voiceBar(c.issue_id)}<div style="margin-top:16px">${actionPanel(c.issue_id)}</div></section>` : `<p class="muted small" style="margin-top:10px">No coaching action for this state, so nothing to acknowledge.</p>`}` : ""}</div>
+      </div>`;
+    document.getElementById("date").onchange = (e) => nav(`/am/cards?date=${e.target.value}&state=${filter}`);
   },
 
   "/am/insights": async () => {
@@ -401,7 +456,7 @@ const views = {
       <div class="grid2" style="margin-top:26px">
         <a class="card" href="/login/am" data-link style="text-decoration:none;color:inherit">
           <div class="kpi"><div class="ic">${ICON.target}</div><div><div class="eyebrow">Portal 1</div><h2>Area Manager</h2>
-          <p class="muted">Full view of all 20 stores: Command Centre, ranked rescue missions with receipts, every coach card, store trends, data-quality flags and the daily run log.</p>
+          <p class="muted">Full view of all 20 stores: the morning brief, ranked actions with receipts, every salesperson's focus, store trends, data-quality flags and the run log.</p>
           <span class="btn">Enter Area Manager portal →</span></div></div></a>
         <a class="card" href="/login/sp" data-link style="text-decoration:none;color:inherit">
           <div class="kpi"><div class="ic">${ICON.user}</div><div><div class="eyebrow">Portal 2</div><h2>Salesperson</h2>
@@ -454,6 +509,7 @@ const views = {
 
   "/sp": async () => {
     const v = await api("/api/sp/me");
+    await loadActions(v.cards.filter((c) => c.card).map((c) => c.card.issue_id));
     const me = v.me, m = me.metrics, st = v.store;
     MISSIONS = { ...(MISSIONS || {}), ...v.missions };
     const today = [...v.cards].reverse().find((c) => c.card);
@@ -473,8 +529,8 @@ const views = {
         <div>
           <div class="eyebrow">${latest.card ? `Today's one thing · brief for ${esc(latest.replay_date)}` : "Today"}</div>
           ${latest.card ? `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)} · ${esc(latest.card.lever)}</div><p class="msg">${esc(latest.card.text)}</p><p class="small" style="color:#bfb3a2">${latest.card.words} words</p></div>
-            ${voiceBar(latest.card.issue_id)}<div style="margin-top:14px">${ackButton(latest.card.issue_id)}</div>`
-          : `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)}</div><p class="msg">${esc(me.name.split(" ")[0])}, nothing to fix today: every lever is within range of your store. Keep doing what you are doing.</p></div>`}
+            ${voiceBar(latest.card.issue_id)}<div style="margin-top:14px">${actionPanel(latest.card.issue_id)}</div>`
+          : `<div class="phone"><div class="eyebrow">SUTRA · ${esc(me.store_id)} · ${esc(({ maintain: "Practice focus", insufficient_evidence: "Not enough evidence yet", off_duty: "Off duty", no_roster: "No roster record", not_generated: "Not generated" })[latest.state?.state] || "Today")}</div><p class="msg">${esc(latest.state?.text || "No brief was generated for you on this date.")}</p></div>`}
         </div>
         <section class="card"><h3>You vs your store</h3><p class="muted small">Store column = average of everyone in ${esc(me.store_id)} over the same 90 days. Other people's names and numbers are not shown here.</p>
           <div class="scroll"><table><tr><th></th><th class="num">You</th><th class="num">Store</th><th></th></tr>
@@ -504,7 +560,7 @@ async function runCase() {
   const btn = document.getElementById("run"), loader = document.getElementById("loader"), out = document.getElementById("out");
   btn.disabled = true; out.innerHTML = "";
   const p = api("/api/case?id=PAT-02-KURTA-JACKET-92D&replay_date=2026-10-31");
-  for (const s of ["Scanning 329 kurta-set bills…", "Comparing same-store peers…", "Checking jacket stock at 31 Oct close…", "Writing and checking the card…"]) { loader.textContent = s; await sleep(420); }
+  loader.textContent = "Loading the case from the server…";
   let r;
   try { r = await p; } catch (err) { loader.textContent = ""; out.innerHTML = `<p class="error">${esc(err.message)} <button class="btn ghost" id="retry">Retry</button></p>`; btn.disabled = false; document.getElementById("retry").onclick = runCase; return; }
   loader.textContent = ""; btn.textContent = "Run again"; btn.disabled = false;

@@ -69,11 +69,15 @@ function pat02Card(s) {
   };
 }
 
+// The daily run publishes the latest brief computed from the newest data version. The supplied pack ends 31 Oct 2026,
+// so until a newer import arrives each run is honestly recorded as "no new data" and re-publishes that brief.
 async function logRun(env, trigger, date) {
   const r = RUNS[date];
+  const prev = await env.DB.prepare("SELECT replay_date FROM run_log ORDER BY id DESC LIMIT 1").first();
+  const status = prev && prev.replay_date === date ? "no new data · brief unchanged" : "published";
   await env.DB.prepare("INSERT INTO run_log (trigger, replay_date, issues, cards, flags) VALUES (?, ?, ?, ?, ?)")
-    .bind(trigger, date, r.counts.issues_found, r.counts.cards, r.counts.flags).run();
-  return r.counts;
+    .bind(`${trigger} · ${status}`, date, r.counts.issues_found, r.counts.cards, r.counts.flags).run();
+  return { ...r.counts, status };
 }
 
 // The salesperson portal only ever receives this person's own slice.
@@ -82,8 +86,8 @@ function personalView(pid) {
   const storeAvg = people.stores[me.store_id];
   const cards = briefs.runs.map((r) => {
     const c = r.cards[pid];
-    if (!c) return { replay_date: r.replay_date, card: null };
-    return { replay_date: r.replay_date, card: { issue_id: c.issue_id, text: c.text, words: c.words, lever: c.lever, checks: c.checks, follow_up: c.follow_up } };
+    if (!c) return { replay_date: r.replay_date, card: null, state: r.states?.[pid] || { state: "not_generated", text: "No brief was generated for you on this date." } };
+    return { replay_date: r.replay_date, card: { issue_id: c.issue_id, text: c.text, words: c.words, lever: c.lever, checks: c.checks, follow_up: c.follow_up }, state: r.states?.[pid] };
   });
   // follow-up for this person's issues where the manager digest measured one
   const follow = {};
@@ -97,8 +101,15 @@ export default {
     const url = new URL(req.url);
     const p = url.pathname;
     try {
+      const sess0 = await readSession(req, env);
       // ----- public
-      if (p === "/api/meta") return json({ dates: DATES, latest: LATEST, windows: briefs.meta.windows, data_end: briefs.meta.data_end });
+      if (p === "/api/meta") {
+        const sess = sess0;
+        const base = { dates: DATES, latest: LATEST, windows: briefs.meta.windows, data_end: briefs.meta.data_end };
+        // names are only for area managers (salespeople never receive the staff list)
+        if (sess?.role === "am") base.people = Object.fromEntries(Object.entries(briefs.meta.salespeople).map(([k, v]) => [k, v.name]));
+        return json(base);
+      }
       if (p === "/api/directory") {
         const latest = RUNS[LATEST].cards;
         const byStore = {};
@@ -225,6 +236,59 @@ export default {
         await env.DB.prepare("INSERT OR REPLACE INTO voice_cache (key, lang, caption, codec, audio_b64) VALUES (?, ?, ?, ?, ?)").bind(key, lang, caption, codec, audio).run();
         await env.DB.prepare("INSERT INTO voice_log (who, issue_id, lang, cached, status) VALUES (?, ?, ?, 0, 'ok')").bind(who, id, lang).run();
         return json({ caption, source_text: text, lang: speakLang, note, codec, audio_b64: audio, cached: false });
+      }
+
+      // ----- action lifecycle (execution state; outcomes live in the follow-up, never here)
+      if (p === "/api/actions" && req.method === "GET") {
+        if (!sess) return bad("Sign in", 401);
+        const ids = (url.searchParams.get("ids") || "").split(",").filter((x) => ISSUES.has(x)).slice(0, 60);
+        const allowed = ids.filter((id) => sess.role === "am" || ISSUES.get(id).salesperson_id === sess.id);
+        if (!allowed.length) return json({ actions: {} });
+        const ph = allowed.map(() => "?").join(",");
+        const rows = (await env.DB.prepare(`SELECT * FROM actions WHERE issue_id IN (${ph})`).bind(...allowed).all()).results;
+        const ev = (await env.DB.prepare(`SELECT issue_id, from_status, to_status, actor, reason, note, created_at FROM action_events WHERE issue_id IN (${ph}) ORDER BY id`).bind(...allowed).all()).results;
+        const out = Object.fromEntries(allowed.map((id) => [id, { status: "new", version: 0, events: [] }]));
+        for (const r of rows) Object.assign(out[r.issue_id], { status: r.status, version: r.version, updated_at: r.updated_at });
+        for (const e of ev) out[e.issue_id].events.push(e);
+        return json({ actions: out });
+      }
+      if (p === "/api/actions/transition" && req.method === "POST") {
+        if (!sess) return bad("Sign in", 401);
+        let b; try { b = await req.json(); } catch { return bad("Body must be JSON"); }
+        const id = String(b?.issue_id || ""), to = String(b?.to || ""), version = Number(b?.version ?? -1);
+        const i = ISSUES.get(id);
+        if (!i) return bad("Unknown issue id", 404);
+        const ownerKind = i.salesperson_id ? "sp" : "am";
+        const ownerId = i.salesperson_id || STORE[i.store_id]?.area_manager_id;
+        const isOwner = sess.role === ownerKind && sess.id === ownerId;
+        const isAM = sess.role === "am";
+        if (sess.role === "sp" && i.salesperson_id !== sess.id) return bad("Not your action", 403);
+        const REASONS = ["stock_or_size_unavailable", "peer_unavailable", "wrong_attribution", "too_few_relevant_customers", "action_unsuitable", "other"];
+        // allowed transitions and who may make them
+        const RULES = {
+          accepted: { from: ["new", "blocked"], who: isOwner || isAM },
+          attempted: { from: ["accepted"], who: isOwner },
+          blocked: { from: ["new", "accepted"], who: isOwner, reason: true },
+          reviewed: { from: ["attempted"], who: isAM },
+          dismissed: { from: ["new", "accepted", "blocked"], who: isAM, reason: true },
+        };
+        const rule = RULES[to];
+        if (!rule) return bad("Unknown status");
+        if (!rule.who) return bad("Your role cannot make this change", 403);
+        const reason = b?.reason ? String(b.reason) : null;
+        if (rule.reason && !(to === "blocked" ? REASONS.includes(reason) : reason && reason.length <= 120)) return bad(to === "blocked" ? `Reason must be one of ${REASONS.join(", ")}` : "A short reason is required");
+        const note = b?.note ? String(b.note).slice(0, 200) : null;
+        await env.DB.prepare("INSERT OR IGNORE INTO actions (issue_id, replay_date, owner_kind, owner_id, status, version) VALUES (?, ?, ?, ?, 'new', 0)")
+          .bind(id, i.replay_date, ownerKind, ownerId).run();
+        const cur = await env.DB.prepare("SELECT status, version FROM actions WHERE issue_id = ?").bind(id).first();
+        if (cur.version !== version) return json({ error: "Someone else updated this action. Reloaded the latest state.", current: cur }, 409);
+        if (!rule.from.includes(cur.status)) return bad(`Cannot go from ${cur.status} to ${to}`, 409);
+        const upd = await env.DB.prepare("UPDATE actions SET status = ?, version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE issue_id = ? AND version = ?")
+          .bind(to, id, version).run();
+        if (upd.meta.changes !== 1) return json({ error: "Conflict, please retry" }, 409);
+        await env.DB.prepare("INSERT INTO action_events (issue_id, from_status, to_status, actor, reason, note) VALUES (?, ?, ?, ?, ?, ?)")
+          .bind(id, cur.status, to, `${sess.role}:${sess.id}:${sess.name}`, reason, note).run();
+        return json({ ok: true, status: to, version: version + 1 });
       }
 
       // ----- salesperson portal: own data only

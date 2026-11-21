@@ -77,8 +77,9 @@ for key, (b, f) in scope_rows.items():
     ly = kpis(win(b, T - pd.Timedelta(days=364), 28), win(f, T - pd.Timedelta(days=364), 28))
     ids = set(b.store_id.unique())
     c = coh[coh.store_id.isin(ids)]
+    cur["repeat_num"] = int(c.back.sum())   # customers who returned 30+ days after first bill
+    cur["repeat_den"] = int(len(c))         # eligible mature cohort
     cur["repeat"] = round(float(c.back.mean()), 4) if len(c) >= 30 else None
-    cur["repeat_n"] = int(len(c))
     b["month"] = b.d.dt.strftime("%Y-%m")
     f = f.assign(month=f.d.dt.strftime("%Y-%m"))
     mb = b.groupby("month").agg(sales=("rev", "sum"), bills=("rev", "size"), conv_bills=("camera_ok", "sum"), units=("units", "sum"))

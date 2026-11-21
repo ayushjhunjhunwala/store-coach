@@ -10,6 +10,7 @@ Usage: python scripts/engine.py <csv-dir> <out.json> [T1 T2 ...]
 Every number is computed here from the CSVs. Nothing is typed in by hand.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,6 +40,15 @@ lines = rd("bill_lines")
 ff = rd("footfall_daily")
 roster = rd("roster_daily")
 stock_w = rd("stock_weekly")
+CUTOFF = os.environ.get("SUTRA_CUTOFF")  # test hook: drop all rows after this date to prove no future leakage
+if CUTOFF:
+    _c = pd.Timestamp(CUTOFF)
+    bills = bills[pd.to_datetime(bills.bill_date) <= _c]
+    lines = lines[lines.bill_id.isin(bills.bill_id)]
+    ff = ff[pd.to_datetime(ff.date) <= _c]
+    roster = roster[pd.to_datetime(roster.date) <= _c]
+    stock_w = stock_w[pd.to_datetime(stock_w.week_ending) <= _c]
+    DATA_END = min(DATA_END, _c)
 
 bills["d"] = pd.to_datetime(bills.bill_date)
 ff["d"] = pd.to_datetime(ff.date)
@@ -68,7 +78,7 @@ B["weekday"] = B.d.dt.day_name()
 # Data quality: door camera shows 0 walk-ins on a day the store billed -> camera fault, exclude that day.
 bills_per_day = B.groupby(["store_id", "d"]).size().rename("bills")
 ffq = ff.set_index(["store_id", "d"]).join(bills_per_day).fillna({"bills": 0})
-ffq["bad"] = (ffq.footfall == 0) & (ffq.bills > 0) | (ffq.bills > ffq.footfall) & (ffq.footfall > 0)
+ffq["bad"] = (ffq.footfall == 0) & (ffq.bills > 0)  # same single mask as scripts/contract.py
 BAD_DAYS = set(ffq[ffq.bad].index)
 
 # First-ever bill per customer (whole history) for the repeat lever.
@@ -172,7 +182,7 @@ def detect(T):
             pres_c = rc[rc.store_id == store].groupby("salesperson_id").present.sum()
             last14 = rc[(rc.store_id == store) & (rc.d > T - pd.Timedelta(days=14))].groupby("salesperson_id").present.sum()
             missing = [p for p in share.index if share[p] >= 0.08 and last14.get(p, 0) == 0]
-            busy = B[(B.store_id == store)].groupby("weekday").size().sort_values(ascending=False).index[:2].tolist()
+            busy = B[(B.store_id == store) & (B.d <= T)].groupby("weekday").size().sort_values(ascending=False).index[:2].tolist()
             rcs = rc[(rc.store_id == store)]
             rbs = rb[(rb.store_id == store)]
             fc = rcs[rcs.d.dt.day_name().isin(busy)].groupby("d").present.sum().mean()
@@ -232,7 +242,7 @@ def detect(T):
             cw, _, _ = window(B, T, BEH_WIN)
             best = cw[(cw.store_id == store) & cw.salesperson_id.isin(now)].groupby("salesperson_id").size().sort_values(ascending=False)
             best_name = sp.loc[best.index[0], "name"] if len(best) else "the senior salesperson"
-            busy = B[(B.store_id == store)].groupby("weekday").size().sort_values(ascending=False).index[:2].tolist()
+            busy = B[(B.store_id == store) & (B.d <= T)].groupby("weekday").size().sort_values(ascending=False).index[:2].tolist()
             issues.append({"id": f"{T.date()}-{store}-{m}-ABSENT", "store_id": store, "salesperson_id": None, "lever": "More bills", "kpi": "absence",
                            "title": f"{store}: {sp.loc[m, 'name']}, a top seller, has not been on the floor since {last_day.date()}",
                            "cause": f"{sp.loc[m, 'name']} made {len(mb)} of {len(prev)} store bills ({pct(share[m])}) from {ps.date()} to {pe.date()}; 0 present days in the 14 days to {T.date()}.",
@@ -332,7 +342,7 @@ def detect(T):
                 })
         # repeat: mature cohort of first-time customers served by each salesperson
         # mature cohort: first-ever bill at this store at least a year before T (brief: repeat = billing again 30+ days later)
-        coh = first[(first.store_id == store) & (first.d <= T - pd.Timedelta(days=365))]
+        coh = first[(first.store_id == store) & (first.d <= T - pd.Timedelta(days=365))]  # first-ever bill is <= T by construction
         if len(coh) >= 80:
             later = B[(B.d <= T) & B.customer_id.isin(coh.index)][["customer_id", "d"]]
             later = later.join(coh.d.rename("fd"), on="customer_id")
@@ -422,9 +432,22 @@ def detect(T):
     # validate cards; keep at most one card per salesperson (biggest rupees)
     valid = []
     for i in sp_issues:
-        checks = {"<=60 words": word_count(i["card"]) <= 60, "one behaviour": bool(i["behaviour"]),
+        import re
+        card = i["card"]
+        sentences = [s for s in re.split(r"(?<=[.!?])\s+", card) if s]
+        evidence_text = " ".join([i["cause"], *i["evidence"], f"{i['rate'] * 100:.0f} {i['rate'] * 100:.1f} {i['peer_rate'] * 100:.0f} {i['peer_rate'] * 100:.1f}",
+                                  str(i["peer"].get("num", "")), str(i["peer"].get("den", "")), f"{(i['peer'].get('rate') or 0) * 100:.0f}"])
+        if i["peer"].get("num") is not None and i["peer"].get("den"):
+            evidence_text += f" {i['peer']['num'] / i['peer']['den'] * 100:.0f}"
+        allowed = set(re.findall(r"\d+(?:\.\d+)?", evidence_text))
+        card_nums = re.findall(r"\d+(?:\.\d+)?", card)
+        peer_first = (i["peer"].get("name") or "").split(" ")[0]
+        checks = {"<=60 words": word_count(card) <= 60,
+                  "one action today": sum(1 for s in sentences if s.startswith("Today")) == 1,
                   "peer in same store": i["peer"]["id"] is None or sp.loc[i["peer"]["id"], "store_id"] == i["store_id"],
-                  "owner/what/when": "Today" in i["card"]}
+                  "peer named is the evidence peer": (not peer_first) or peer_first in card,
+                  "every number traced to evidence": all(n in allowed for n in card_nums),
+                  "no discount instruction": not re.search(r"(offer|give) (a |an )?(discount|deal)", card, re.I)}
         i["checks"] = checks
         i["owner"] = sp.loc[i["salesperson_id"], "name"]
         i["when"] = "Today"
@@ -447,7 +470,7 @@ def detect(T):
             dedup.append(i)
         mine = dedup
         digest[am_id] = {"name": am["name"], "city": am["city"], "stores": [s.strip() for s in am.stores.split(",")],
-                         "issues": mine[:int(am.max_alerts_per_week)], "suppressed": len(mine[int(am.max_alerts_per_week):])}
+                         "budget": int(am.max_alerts_per_week), "candidates": mine}
 
     # salesperson cards: rostered on T
     on = roster[(roster.d == T) & (roster.present == 1)]
@@ -457,7 +480,28 @@ def detect(T):
             cards[p] = {"name": sp.loc[p, "name"], "store_id": sp.loc[p, "store_id"], "issue_id": mine[0]["id"], "text": mine[0]["card"],
                         "words": word_count(mine[0]["card"]), "lever": mine[0]["lever"], "checks": mine[0]["checks"],
                         "kpi": mine[0]["kpi"], "rate": mine[0]["rate"]}
-    return {"replay_date": T.date().isoformat(), "digest": digest, "cards": cards, "flags": flags,
+    # every salesperson with recent activity gets one honest state (no card never means "on track")
+    states = {}
+    rost_T = roster[roster.d == T].set_index("salesperson_id").status.to_dict()
+    active = bw.groupby("salesperson_id").size()
+    for p, nb in active.items():
+        store = sp.loc[p, "store_id"]
+        fname = sp.loc[p, "name"].split()[0]
+        st = rost_T.get(p)
+        if st is None:
+            state, text = "no_roster", "No roster row for this date; attendance unknown, so no card is sent."
+        elif st != "Present":
+            state, text = "off_duty", "Off duty on the roster today; no card is sent."
+        elif p in cards:
+            state, text = "improvement", cards[p]["text"]
+        elif nb < MIN_BILLS or (T - pd.Timestamp(sp.loc[p, "join_date"])).days < BEH_WIN:
+            state, text = "insufficient_evidence", (f"{fname}, you have {nb} bills in the last 90 days, too few for a fair comparison. "
+                                                     f"Today: offer one matching add-on with every main garment, and note what customers say.")
+        else:
+            state, text = "maintain", (f"{fname}, no gap found against your {store} peers in the last 90 days ({nb} bills checked). "
+                                       f"Today: keep offering one matching add-on with every main garment.")
+        states[p] = {"state": state, "text": text, "store_id": store, "bills_90d": int(nb), "roster": st or "unknown"}
+    return {"replay_date": T.date().isoformat(), "digest": digest, "cards": cards, "flags": flags, "states": states,
             "counts": {"issues_found": len(issues), "cards": len(cards), "flags": len(flags)}}
 
 
@@ -471,7 +515,7 @@ def follow_up(issue, T):
     k = issue["kpi"]
     if k == "conversion":
         f = ff[(ff.d >= s) & (ff.d <= e) & (ff.store_id == issue["store_id"])]
-        f = f[[(r.store_id, r.d) not in BAD_DAYS for r in f.itertuples()]]
+        f = f[pd.Series([(r.store_id, r.d) not in BAD_DAYS for r in f.itertuples()], index=f.index, dtype=bool)]
         b = nb[(nb.store_id == issue["store_id"]) & nb.d.isin(f.d)]
         n, den = len(b), int(f.footfall.sum())
         new = n / den if den else None
@@ -512,9 +556,43 @@ def follow_up(issue, T):
             "n": int(n), "den": int(den), "note": "Before/after observation only, not proof that the coaching caused it."}
 
 
+def identity(issue):
+    """Stable issue identity across runs: the id without its run-date prefix."""
+    return issue["id"][11:]
+
+
+# Weekly alert budget: at most `max_alerts_per_week` NEW unique issues per manager in any rolling 7 days.
+# An issue raised in a run within the last 14 days is ONGOING: it stays visible as an update and costs no budget.
+COOLDOWN_DAYS, BUDGET_WINDOW = 14, 7
+ledger = {}     # am_id -> list of (date, identity) for issues issued as NEW
+last_seen = {}  # (am_id, identity) -> last run date shown
 runs = []
-for T in DATES:
+for T in sorted(DATES):
     r = detect(T)
+    Td = pd.Timestamp(T)
+    for am_id, am in r["digest"].items():
+        new_recent = [d for d, _ in ledger.get(am_id, []) if (Td - d).days < BUDGET_WINDOW]
+        room = am["budget"] - len(new_recent)
+        shown, held = [], 0
+        for i in am.pop("candidates"):
+            k = identity(i)
+            prev = last_seen.get((am_id, k))
+            if prev is not None and (Td - prev).days <= COOLDOWN_DAYS:
+                i["alert"] = "ongoing"
+                i["first_raised"] = next((str(d.date()) for d, x in ledger.get(am_id, []) if x == k), str(prev.date()))
+            elif room > 0:
+                i["alert"] = "new"
+                room -= 1
+                ledger.setdefault(am_id, []).append((Td, k))
+            else:
+                held += 1
+                continue
+            i["identity"] = k
+            last_seen[(am_id, k)] = Td
+            shown.append(i)
+        am["issues"] = shown
+        am["new_count"] = sum(1 for i in shown if i["alert"] == "new")
+        am["suppressed"] = held
     for am in r["digest"].values():
         for i in am["issues"]:
             i["follow_up"] = follow_up(i, T)
