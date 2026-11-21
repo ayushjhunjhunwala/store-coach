@@ -5,24 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SUTRA AI · Store Coach</title>
 <meta name="description" content="Every morning, SUTRA AI tells each Manyavar area manager which stores need attention and why, and gives each salesperson one thing to do better today.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237a1e2c'/%3E%3Ctext x='16' y='22' font-family='Georgia' font-size='18' fill='%23e8c98f' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <div class="banner">Historical synthetic-data prototype · Data as of 31 Oct 2026 · No real store, staff or customer</div>
-<header class="nav">
-  <a href="/" class="brand" data-link>SUTRA<span>AI</span></a>
-  <nav>
-    <a href="/demo" data-link>Live case</a>
-    <a href="/manager" data-link>Area managers</a>
-    <a href="/me" data-link>Salespeople</a>
-    <a href="/trust" data-link>Trust</a>
+<header class="top">
+  <a href="/" class="brand" data-link><span class="mark">S</span><b>SUTRA</b><em>AI Store Coach</em><small>for Manyavar</small></a>
+  <nav class="pills">
+    <a href="/" data-link>Command Centre</a>
+    <a href="/stores" data-link>Stores</a>
+    <a href="/missions" data-link>Rescue Missions</a>
+    <a href="/me" data-link>Coach Cards</a>
+    <a href="/insights" data-link>Insights</a>
   </nav>
+  <label class="who" title="View as area manager"><span class="avatar" id="avatar">NS</span><select id="am-select" aria-label="View as area manager"></select></label>
 </header>
-<main id="app" aria-live="polite"></main>
-<footer>Jugaad Labs · Vibe Coders Hackathon Ed. 3 · Built on the Manyavar VCH3 data pack</footer>
+<div class="shell">
+  <aside class="rail" aria-label="Quick navigation">
+    <a href="/" data-link title="Command Centre"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></a>
+    <a href="/stores" data-link title="Stores"><svg viewBox="0 0 24 24"><path d="M4 9l1.5-5h13L20 9M4 9h16v11H4zM4 9c0 1.7 1.3 3 3 3s3-1.3 3-3m0 0c0 1.7 1.3 3 2 3s2-1.3 2-3m0 0c0 1.7 1.3 3 3 3s3-1.3 3-3"/></svg></a>
+    <a href="/missions" data-link title="Rescue Missions"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg></a>
+    <a href="/insights" data-link title="Insights"><svg viewBox="0 0 24 24"><path d="M5 20V11M10 20V6M15 20v-8M20 20V4"/></svg></a>
+    <a href="/demo" data-link title="Live case"><svg viewBox="0 0 24 24"><path d="M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/></svg></a>
+  </aside>
+  <main id="app" aria-live="polite"></main>
+</div>
+<footer>Jugaad Labs · Vibe Coders Hackathon Ed. 3 · Computed from the Manyavar VCH3 synthetic data pack · Independent prototype, not affiliated with Vedant Fashions</footer>
 <script src="/app.js" type="module"></script>
 </body>
 </html>

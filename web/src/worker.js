@@ -1,5 +1,6 @@
 import briefs from "./data/briefs.json";
 import pat02 from "./data/pat02_case.json";
+import storeData from "./data/stores.json";
 
 const RUNS = Object.fromEntries(briefs.runs.map((r) => [r.replay_date, r]));
 const DATES = briefs.runs.map((r) => r.replay_date);
@@ -55,6 +56,17 @@ export default {
     const p = url.pathname;
     try {
       if (p === "/api/meta") return json({ dates: DATES, latest: LATEST, ...briefs.meta });
+      if (p === "/api/stores") {
+        const scope = url.searchParams.get("scope");
+        if (scope) {
+          if (!storeData.scopes[scope]) return bad("Unknown scope");
+          return json({ scope, as_of: storeData.as_of, ...storeData.scopes[scope], repeat_definition: storeData.repeat_definition });
+        }
+        const table = storeData.stores.map((s) => ({ ...s, last28: storeData.scopes[s.store_id].last28, prev28: storeData.scopes[s.store_id].prev28 }));
+        return json({ as_of: storeData.as_of, stores: table, area_managers: storeData.area_managers, network: storeData.scopes.network.last28,
+          repeat_by_salesperson: storeData.repeat_by_salesperson, category_mix_90d: storeData.category_mix_90d, data_quality: storeData.data_quality,
+          repeat_definition: storeData.repeat_definition });
+      }
       if (p === "/api/brief") {
         const d = url.searchParams.get("date") || LATEST;
         if (!RUNS[d]) return bad(`Unknown replay date. Valid: ${DATES.join(", ")}`);
