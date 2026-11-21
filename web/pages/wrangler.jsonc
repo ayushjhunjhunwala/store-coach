@@ -1,0 +1,10 @@
+// Cloudflare Pages project: serves the site and API at sutra-store-coach.pages.dev.
+// Build with web/build_pages.ps1 (bundles src/worker.js into dist/_worker.js).
+{
+  "name": "sutra-store-coach",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-11-01",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "sutra-coach", "database_id": "bdc7d3cb-74fa-4e18-8d3f-daa952e39d61" }
+  ]
+}
