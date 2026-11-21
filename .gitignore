@@ -21,3 +21,5 @@ manyavar-vch3-data/
 *.xlsx
 __pycache__/
 .playwright-mcp/
+web/.wrangler/
+node_modules/

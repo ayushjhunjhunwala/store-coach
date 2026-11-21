@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sutra-store-coach",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*"] },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "sutra-coach", "database_id": "bdc7d3cb-74fa-4e18-8d3f-daa952e39d61", "migrations_dir": "migrations" }
+  ],
+  // 06:00 IST every morning = 00:30 UTC
+  "triggers": { "crons": ["30 0 * * *"] },
+  "observability": { "enabled": true }
+}
