@@ -624,7 +624,17 @@ async function render() {
   paintChrome();
   document.querySelectorAll(".pills a, .rail a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === path));
   const v = views[path] || views["/"];
-  try { await v(); } catch (err) { app.innerHTML = `<p class="error">Could not load: ${esc(err.message)}</p>`; }
+  const TITLES = { "/": "Welcome", "/demo": "Live case PAT-02", "/login/am": "Area manager sign-in", "/login/sp": "Salesperson sign-in", "/sp": "Today's focus",
+    "/am": "Morning brief", "/am/missions": "Actions", "/am/cards": "Staff focus", "/am/stores": "Stores", "/am/insights": "Data & follow-up" };
+  document.title = `${TITLES[path] || "SUTRA"} · SUTRA Store Coach`;
+  const token = (render.token = (render.token || 0) + 1);
+  app.innerHTML = `<p class="muted" role="status">Loading…</p>`;
+  try { await v(); } catch (err) {
+    if (token !== render.token) return;
+    app.innerHTML = `<div class="error" role="alert">Could not load this page: ${esc(err.message)}. <button class="btn ghost" id="retry-route">Try again</button></div>`;
+    document.getElementById("retry-route").onclick = render;
+  }
+  if (token === render.token) app.querySelector("h1")?.setAttribute("tabindex", "-1");
   if (!location.search.includes("id=")) window.scrollTo(0, 0);
 }
 api("/api/session").then((r) => { SESSION = r.session; if (SESSION?.role === "am") SCOPE = SESSION.id; }).catch(() => {}).finally(render);
