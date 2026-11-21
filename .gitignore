@@ -20,3 +20,4 @@ manyavar-vch3-data/
 *.zip
 *.xlsx
 __pycache__/
+.playwright-mcp/
