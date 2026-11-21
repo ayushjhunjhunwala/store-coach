@@ -287,6 +287,10 @@ const views = {
         <h1>Morning brief</h1>
         <p class="sub">${am ? `${esc(am.city)} · ${ids.length} stores` : "All 20 stores · 6 cities"} · last 28 days to ${esc(s.as_of)}, compared with the 28 days before. Historical replay: the data pack ends 31 Oct 2026, so this is the brief for that date.</p>
       </section>
+        <section class="card" style="margin-top:18px"><div class="row-flex"><h2>Today's actions</h2><a href="/am/missions" data-link class="small">Open all actions →</a></div>
+          <div class="scroll"><table class="queue"><tr><th>Store / owner</th><th>Reason</th><th class="num">Opportunity</th></tr>
+          ${top.map((i) => `<tr class="click" tabindex="0" data-go="/am/missions?am=${esc(s.stores.find((x) => x.store_id === i.store_id).area_manager_id)}"><td><div class="person"><span class="dot">${ICON.user}</span><div><b>${esc(i.salesperson_id ? i.owner : i.store_id)}</b><div class="muted small">${esc(i.store_id)} · ${esc(i.lever)}</div></div></div></td><td class="small">${esc(i.title)}</td><td class="num opp-cell">${inr(i.rupees)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Nothing needs attention this week.</td></tr>`}
+          </table></div><p class="muted small">Ranked by estimated rupees at stake per 28 days. Brief for ${esc(m.latest)}.</p></section>
       <div class="grid4">
         ${kpi("bag", "Total sales", inrShort(c.sales), delta(c.sales, p.sales), "vs prior 28 days")}
         ${kpi("target", "Conversion rate", pct(c.conversion), delta(c.conversion, p.conversion, "pp"), `${c.bills.toLocaleString("en-IN")} bills / ${c.footfall.toLocaleString("en-IN")} walk-ins`)}
@@ -297,15 +301,12 @@ const views = {
         <div><div class="eyebrow">Featured opportunity</div><div class="code">${esc(featured.code)}</div><div class="muted">${esc(featured.line)}</div></div>
         <div class="divider"></div>
         <div><div class="muted">Estimated opportunity</div><div class="opp">${inr(featured.opp)}</div><div class="muted small">${esc(featured.note)}</div></div>
-        <a class="btn" href="${featured.href}" data-link>View mission →</a>
+        <a class="btn" href="${featured.href}" data-link>Open evidence →</a>
         <div class="art">${motifSVG}</div></section>` : ""}
-      <div class="grid2" style="margin-top:22px">
+      <div style="margin-top:22px">
         <section class="card"><div class="row-flex"><h2>Sales performance</h2><div class="seg" id="seg"><button data-k="week">Week</button><button data-k="month" class="on">Month</button></div></div>
           <div id="chartbox"></div><p class="muted small">Sales incl. GST from every bill line (packaging excluded). Oct 2025 peaked on Diwali (20 Oct); Diwali 2026 falls on 8 Nov, after the data ends.</p></section>
-        <section class="card"><div class="row-flex"><h2>Top rescue missions</h2><a href="/am/missions" data-link class="small">View all →</a></div>
-          <div class="scroll"><table><tr><th>Store / owner</th><th>Reason</th><th class="num">Opportunity</th></tr>
-          ${top.map((i) => `<tr class="click" data-go="/am/missions?am=${esc(s.stores.find((x) => x.store_id === i.store_id).area_manager_id)}"><td><div class="person"><span class="dot">${ICON.user}</span><div><b>${esc(i.salesperson_id ? i.owner : i.store_id)}</b><div class="muted small">${esc(i.store_id)} · ${esc(i.lever)}</div></div></div></td><td class="small">${esc(i.title)}</td><td class="num opp-cell">${inr(i.rupees)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Nothing needs attention this week.</td></tr>`}
-          </table></div><p class="muted small">Ranked by estimated rupees at stake per 28 days. Brief for ${esc(m.latest)}.</p></section>
+
       </div>`;
     const draw = (k) => {
       const pts = k === "month"
@@ -471,11 +472,13 @@ const views = {
 
   "/": async () => {
     app.innerHTML = `
-      <section class="hero">${archSVG}
-        <div class="hello">SUTRA AI · Store Coach for Manyavar</div>
-        <h1>Every morning,<br>one thing to do better.</h1>
-        <p class="sub">SUTRA reads every bill, finds where a store is leaking sales, proves it with receipts, and tells each area manager which stores need attention, and each salesperson one thing to do today. No one has to ask it a question.</p>
-      </section>
+      <section class="welcome"><div class="copy">
+        <div class="eyebrow">SUTRA Store Coach · for Manyavar store teams</div>
+        <h1>Know where to focus.<br>Help every advisor sell better.</h1>
+        <p class="sub">Every morning SUTRA reads every bill, tells each area manager which stores need attention and why, with receipts, and gives each salesperson one thing to do better today. More bills, bigger baskets, more repeat.</p>
+        <p style="margin-top:18px"><a class="btn" href="/demo" data-link>Explore the synthetic demo</a> <a class="btn ghost" href="/login/am" data-link>Sign in (demo identities)</a></p>
+        <p class="muted small">Pilot sign-in is not connected in this prototype; demo identities use synthetic data only.</p>
+      </div><div class="img" role="img" aria-label="Deep maroon woven fabric with a narrow brass border"></div></section>
       <div class="grid2" style="margin-top:26px">
         <a class="card" href="/login/am" data-link style="text-decoration:none;color:inherit">
           <div class="kpi"><div class="ic">${ICON.target}</div><div><div class="eyebrow">Portal 1</div><h2>Area Manager</h2>
@@ -637,6 +640,7 @@ document.addEventListener("click", (e) => {
   const row = e.target.closest("[data-go]");
   if (row) nav(row.dataset.go);
 });
+document.addEventListener("keydown", (e) => { const r = e.target.closest?.("[data-go]"); if (r && e.key === "Enter") nav(r.dataset.go); });
 window.addEventListener("popstate", render);
 async function render() {
   let path = location.pathname.replace(/\/$/, "") || "/";
